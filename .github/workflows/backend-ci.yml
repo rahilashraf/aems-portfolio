@@ -1,0 +1,353 @@
+# Backend continuous integration.
+#
+# Runs on every pull request targeting main and every push to main, with no path filters, so the
+# required checks always report a result and cannot be skipped by touching only "unrelated" files.
+# Uses no secrets and no production credentials; the passwords below are throwaway values for the
+# ephemeral CI database. Nothing is deployed or published.
+#
+# Recommended required status checks for main (see docs/adr/0011-continuous-integration.md):
+#   "Backend CI result" (aggregates every job below)
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  UV_VERSION: "0.11.32"
+  UV_NO_PROGRESS: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  lint:
+    name: Lint & type check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: backend/.python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install locked dependencies
+        run: make install
+
+      - name: Ruff lint and format check
+        run: make lint
+
+      - name: Strict mypy
+        run: make typecheck
+
+      - name: Repository hygiene hooks
+        env:
+          # Checked by dedicated steps/jobs, or not meaningful in CI (branch protection hook).
+          SKIP: no-commit-to-branch,ruff-check,ruff-format,mypy,detect-secrets
+        run: uv run --project backend pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: Tests & migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-superuser-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DJANGO_SECRET_KEY: ci-only-insecure-secret-key-not-used-outside-this-workflow
+      DATABASE_URL: postgres://aems_app:ci-only-app-password@localhost:5432/aems
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: backend/.python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install locked dependencies
+        run: make install
+
+      - name: Create non-superuser application role
+        env:
+          PGHOST: localhost
+          PGPASSWORD: ci-only-superuser-password
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+          AEMS_DB_NAME: aems
+          AEMS_DB_USER: aems_app
+          AEMS_DB_PASSWORD: ci-only-app-password
+        run: |
+          bash docker/postgres/init/01-create-app-role.sh
+          is_super="$(psql -tAc "SELECT rolsuper FROM pg_roles WHERE rolname = 'aems_app'")"
+          test "$is_super" = "f" || { echo "aems_app must not be a superuser"; exit 1; }
+          echo "aems_app is a non-superuser role"
+
+      - name: Django system checks
+        run: make check
+
+      - name: Fresh database migration
+        run: make migrate
+
+      - name: Verify no default auth tables exist
+        run: make check-no-auth-tables
+
+      - name: Migration drift check (application settings)
+        run: make check-migrations
+
+      - name: Migration drift check (test settings, includes fixture app)
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+        run: make check-migrations
+
+      - name: Test suite with branch coverage (90% gate)
+        run: make test PYTEST_ARGS="--cov-report=xml:coverage.xml --junitxml=junit.xml"
+
+      - name: Upload coverage and test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-coverage
+          path: |
+            backend/coverage.xml
+            backend/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  security:
+    name: Security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: backend/.python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install locked dependencies
+        run: make install
+
+      - name: Bandit static analysis
+        run: make security
+
+      - name: Dependency vulnerability audit
+        run: make audit
+
+      - name: Secret detection
+        run: make secrets
+
+      - name: Production deployment checks
+        run: make deploy-check
+
+  api-contract:
+    name: API contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: backend/.python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install locked dependencies
+        run: make install
+
+      - name: Generate, validate and compare OpenAPI schema
+        run: make schema-check
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      IMAGE: aems-backend:ci
+      API_HOST: api.example.org
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate docker-compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          echo "docker-compose.yml is valid"
+
+      - name: Build production image (committed Dockerfile, no cache)
+        run: docker build --pull --no-cache --target prod --tag "$IMAGE" backend
+
+      - name: Verify image runs as a non-root user without dev tooling
+        run: |
+          user="$(docker image inspect --format '{{.Config.User}}' "$IMAGE")"
+          echo "Configured user: $user"
+          test -n "$user" && test "$user" != "root" && test "$user" != "0"
+          uid="$(docker run --rm --entrypoint id "$IMAGE" -u)"
+          echo "Runtime uid: $uid"
+          test "$uid" != "0"
+          if docker run --rm --entrypoint sh "$IMAGE" -c 'command -v uv || command -v pytest || command -v ruff'; then
+            echo "Development tooling found in production image"; exit 1
+          fi
+
+      - name: Production settings refuse unsafe configuration
+        run: |
+          if docker run --rm -e DJANGO_DEBUG=true -e DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+               -e DJANGO_ALLOWED_HOSTS="$API_HOST" -e DATABASE_URL=postgres://u:p@db:5432/db \
+               --entrypoint python "$IMAGE" -c 'import django; django.setup()'; then
+            echo "Production settings accepted DJANGO_DEBUG=true"; exit 1
+          fi
+          echo "DJANGO_DEBUG=true correctly refused"
+
+      - name: Start PostgreSQL for the container
+        run: |
+          docker network create aems-ci
+          docker run -d --name aems-db --network aems-ci \
+            -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-only-superuser-password -e POSTGRES_DB=postgres \
+            -e AEMS_DB_NAME=aems -e AEMS_DB_USER=aems_app -e AEMS_DB_PASSWORD=ci-only-app-password \
+            -v "$PWD/docker/postgres/init:/docker-entrypoint-initdb.d:ro" \
+            --health-cmd "pg_isready -U postgres -d aems" --health-interval 2s --health-retries 30 \
+            postgres:17-alpine
+          for _ in $(seq 1 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' aems-db)" = healthy ] && exit 0
+            sleep 2
+          done
+          docker logs aems-db; exit 1
+
+      - name: Start the production container
+        run: |
+          docker run -d --name aems-api --network aems-ci -p 127.0.0.1:8000:8000 \
+            -e DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+            -e DJANGO_ALLOWED_HOSTS="$API_HOST" \
+            -e DJANGO_BEHIND_TLS_PROXY=true \
+            -e DATABASE_URL=postgres://aems_app:ci-only-app-password@aems-db:5432/aems \
+            "$IMAGE"
+
+      - name: Wait for the image HEALTHCHECK to report healthy
+        run: |
+          for _ in $(seq 1 36); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' aems-api)"
+            echo "health: $status"
+            [ "$status" = healthy ] && exit 0
+            [ "$status" = unhealthy ] && break
+            sleep 5
+          done
+          docker inspect -f '{{json .State.Health}}' aems-api
+          docker logs aems-api
+          exit 1
+
+      - name: Verify health and API endpoint behaviour
+        run: |
+          base=http://127.0.0.1:8000
+          expect() {  # expect <status> <path> [extra curl args...]
+            local want="$1" path="$2"; shift 2
+            local got
+            got="$(curl -sS -o /tmp/body -w '%{http_code}' -H "Host: $API_HOST" "$@" "$base$path")"
+            echo "$path -> $got (expected $want)"
+            [ "$got" = "$want" ] || { cat /tmp/body; exit 1; }
+          }
+          tls=(-H "X-Forwarded-Proto: https")  # as set by the trusted TLS-terminating proxy
+          # Health probes are exempt from the HTTPS redirect (in-cluster plain HTTP).
+          expect 200 /health/live/
+          expect 200 /health/ready/
+          # Everything else is redirected to HTTPS unless it arrived via the TLS proxy.
+          expect 301 /api/v1/
+          expect 200 /api/v1/ "${tls[@]}"
+          grep -q '"api_version":"v1"' /tmp/body
+          # API documentation is disabled in production.
+          expect 404 /api/docs/ "${tls[@]}"
+          grep -q '"code":"not_found"' /tmp/body
+          expect 404 /api/schema/ "${tls[@]}"
+          curl -sS -D - -o /dev/null -H "Host: $API_HOST" "${tls[@]}" "$base/api/v1/" \
+            | grep -qi '^x-request-id:'
+          # Host validation stays enforced: a loopback Host header is rejected.
+          got="$(curl -sS -o /dev/null -w '%{http_code}' "$base/health/live/")"
+          echo "loopback Host -> $got (expected 400)"
+          test "$got" = 400
+
+      - name: Show container logs
+        if: always()
+        run: docker logs aems-api 2>&1 | tail -n 100 || true
+
+  result:
+    name: Backend CI result
+    if: always()
+    needs: [lint, test, security, api-contract, docker]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every backend job to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || { echo "A required job did not succeed."; exit 1; }
+          done
+          echo "All backend CI jobs succeeded."
