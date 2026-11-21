@@ -1,6 +1,6 @@
 # ADR-0007: API error format (RFC 9457 Problem Details)
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by [ADR-0009](0009-api-error-response-conventions.md)
 - **Date:** 2026-11-21
 
 ## Context

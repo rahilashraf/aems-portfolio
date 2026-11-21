@@ -4,28 +4,31 @@ AEMS is a multi-organization SaaS platform for schools, universities, and traini
 supporting online and paper-based examinations with strict tenant isolation and customizable,
 organization-scoped roles and permissions.
 
-> **Status:** Phase 1 — Backend Foundation, Batch 1 (repository scaffolding).
+> **Status:** Phase 1 — Backend Foundation, Batch 2 (core infrastructure and CI).
 > See the [Phase 1 plan](docs/phase-1-plan.md) and [Architecture Decision Records](docs/adr/README.md).
 
 ## Technology
 
 | Layer | Stack |
 |---|---|
-| Backend | Python 3.13, Django 5.2 LTS (Django REST Framework from Batch 2) |
+| Backend | Python 3.13, Django 5.2 LTS, Django REST Framework, django-filter, drf-spectacular, structlog |
 | Database | PostgreSQL 17 |
 | Frontend | Next.js, React, TypeScript (after backend approval) |
 | Tooling | uv, ruff, mypy (strict), pytest, bandit, pip-audit, pre-commit |
 | Dev environment | Docker Compose (PostgreSQL, backend, Mailpit) |
-| CI | GitHub Actions (Batch 2) |
+| CI | GitHub Actions ([Backend CI](.github/workflows/backend-ci.yml)), Dependabot |
 
 ## Repository layout
 
 ```
 backend/            Django project
   config/           settings (base/local/test/production), URLs, WSGI/ASGI
-  apps/core/        shared infrastructure (health checks in Batch 1)
+  apps/core/        shared infrastructure: health checks, base models, request context,
+                    structured logging, Problem Details errors, API conventions, OpenAPI
+  tests/            test-only fixture app (never installed outside the test settings)
 docker/postgres/    database bootstrap scripts (least-privilege runtime role)
-docs/               Phase plan, ADRs, architecture notes
+docs/               Phase plan, ADRs, committed OpenAPI schema (docs/api/openapi.yaml)
+.github/            CI workflow, Dependabot, PR template
 docker-compose.yml  local development stack
 Makefile            developer commands (`make help`)
 ```
@@ -41,6 +44,9 @@ make up                  # builds and starts db, backend, mailpit
 
 | Service | URL |
 |---|---|
+| API root | http://localhost:8000/api/v1/ |
+| API docs (Swagger UI / ReDoc) | http://localhost:8000/api/docs/ · http://localhost:8000/api/redoc/ |
+| OpenAPI schema | http://localhost:8000/api/schema/ |
 | Backend liveness | http://localhost:8000/health/live/ |
 | Backend readiness | http://localhost:8000/health/ready/ |
 | Mailpit (email UI) | http://localhost:8025/ |
@@ -77,14 +83,50 @@ make qa                  # every quality gate
 
 | Command | Purpose |
 |---|---|
-| `make test` | Tests with branch coverage; fails below 90% |
+| `make test` | Tests with branch coverage; fails below 90% (extra pytest args: `PYTEST_ARGS=...`) |
 | `make lint` / `make format` | ruff lint + formatting |
-| `make typecheck` | mypy (strict) with django-stubs |
+| `make typecheck` | mypy (strict) with django-stubs and DRF stubs |
+| `make check` | Django system checks, including the public-endpoint allowlist |
 | `make security` | bandit static analysis |
 | `make audit` | pip-audit against the locked dependency set |
+| `make secrets` | detect-secrets scan against `.secrets.baseline` |
 | `make check-migrations` | Fails if models and migrations diverge |
+| `make check-no-auth-tables` | Fails if Django's default auth/admin/session tables exist |
+| `make schema` | Regenerates `docs/api/openapi.yaml` |
+| `make schema-check` | Fails if the committed schema differs from the generated one |
 | `make deploy-check` | `manage.py check --deploy` against production settings |
-| `make qa` | All of the above |
+| `make qa` | Every local quality gate |
+
+## API
+
+The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the ADRs):
+
+- **JSON only**: requests are parsed as JSON (`415` otherwise); responses are JSON; datetimes
+  are ISO 8601 UTC.
+- **Deny by default**: an endpoint without explicit permissions is unreachable. Public endpoints
+  use `PublicEndpoint` **and** must be listed in `API_PUBLIC_ENDPOINTS`, which is enforced by
+  system checks `core.E001`/`core.E002`. There is no authentication until Batch 3.
+- **Errors**: RFC 9457 Problem Details (`application/problem+json`) with a stable `code` and the
+  `request_id` ([ADR-0009](docs/adr/0009-api-error-response-conventions.md)). `WWW-Authenticate`,
+  `Retry-After` and `Allow` headers are preserved.
+- **Request IDs**: every response carries `X-Request-ID`. A valid client-supplied ID (8–128
+  characters of `A-Z a-z 0-9 . _ : -`) is propagated; otherwise a UUIDv4 is generated
+  ([ADR-0010](docs/adr/0010-request-correlation-and-structured-logging.md)).
+- **Pagination**: `?page=` and `?page_size=` (default 25, maximum 100; larger values are capped).
+  Responses contain `count`, `page`, `page_size`, `total_pages`, `next`, `previous` and `results`.
+  An invalid value returns `400 invalid_query_parameters`; a page past the end returns
+  `404 page_not_found`.
+- **Filtering and ordering**: only explicitly allowlisted fields. An unknown `?ordering=` field
+  returns 400. Ordering always ends with the primary key, so pages are stable.
+
+| Endpoint | Description | Access |
+|---|---|---|
+| `GET /api/v1/` | API root (service name and API version) | Public |
+| `GET /api/schema/` | OpenAPI 3 schema | Public when `API_DOCS_ENABLED`; always 404 in production |
+| `GET /api/docs/`, `GET /api/redoc/` | Swagger UI / ReDoc | Same as above |
+
+The committed contract lives at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). Regenerate it
+with `make schema`; CI fails if it is stale.
 
 ## Health endpoints
 
@@ -99,6 +141,14 @@ Responses are uncached and never include internal error details.
 
 All configuration comes from environment variables (see [`.env.example`](.env.example)).
 
+| Variable | Default | Purpose |
+|---|---|---|
+| `DJANGO_LOG_FORMAT` | `json` (`console` in local settings) | Log rendering |
+| `DJANGO_LOG_LEVEL` | `INFO` | Root log level (SQL logging is always suppressed) |
+| `DJANGO_API_DOCS_ENABLED` | `false` (`true` in local settings) | Serve schema/Swagger/ReDoc; production refuses `true` |
+| `DJANGO_CORS_ALLOWED_ORIGINS` | none (`http://localhost:3000` locally) | Explicit origin allowlist; no wildcards; HTTPS required in production |
+| `DJANGO_CORS_ALLOW_CREDENTIALS` | `false` | Cross-origin cookies (needed for the Batch 3 refresh-cookie flow) |
+
 Every environment refuses to start unless `DATABASE_URL` resolves to the PostgreSQL backend
 (`postgres://`, `postgresql://`, or `pgsql://`); SQLite and other engines are rejected.
 
@@ -108,7 +158,9 @@ Every environment refuses to start unless `DATABASE_URL` resolves to the Postgre
 
 - `DJANGO_DEBUG` is true (it is validated, never silently overridden);
 - `DJANGO_SECRET_KEY` is missing, shorter than 50 characters, low-variety, or a placeholder;
-- `DJANGO_ALLOWED_HOSTS` is empty or contains `*`.
+- `DJANGO_ALLOWED_HOSTS` is empty or contains `*`;
+- `DJANGO_API_DOCS_ENABLED` is true;
+- a CORS origin is a wildcard, `null`, malformed, or not HTTPS.
 
 **Trusted TLS proxy (`DJANGO_BEHIND_TLS_PROXY`, default `false`).** When enabled, Django treats a
 request as HTTPS if it carries `X-Forwarded-Proto: https`. Enable it **only** when every request
@@ -125,6 +177,20 @@ validation therefore stays fully enforced: no loopback address or wildcard needs
 
 The application connects to PostgreSQL as a non-superuser role (`aems_app`) created by
 [`docker/postgres/init/01-create-app-role.sh`](docker/postgres/init/01-create-app-role.sh).
+
+## Continuous integration
+
+[Backend CI](.github/workflows/backend-ci.yml) runs on every pull request to `main` and every
+push to `main`, with no path filters ([ADR-0011](docs/adr/0011-continuous-integration.md)):
+
+| Check | Contents |
+|---|---|
+| Lint & type check | ruff, ruff format, strict mypy, hygiene hooks |
+| Tests & migrations | PostgreSQL 17, non-superuser role, fresh migrate, no default auth tables, migration drift, full suite with 90% branch coverage, coverage artifact |
+| Security | Bandit, pip-audit, detect-secrets, production `check --deploy` |
+| API contract | OpenAPI generation, validation and drift check |
+| Docker image | clean build of the committed Dockerfile, non-root, container becomes `healthy`, endpoint behaviour |
+| Backend CI result | passes only if every job above passed (recommended required check) |
 
 ## Contributing
 

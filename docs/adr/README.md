@@ -13,5 +13,8 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0004](0004-authentication-and-session-management.md) | Authentication and session management | Accepted |
 | [0005](0005-rbac-and-ownership-invariants.md) | Organization-scoped RBAC and ownership invariants | Accepted |
 | [0006](0006-audit-logging.md) | Audit logging | Accepted |
-| [0007](0007-api-error-format.md) | API error format (RFC 9457) | Accepted |
+| [0007](0007-api-error-format.md) | API error format (RFC 9457) | Accepted; refined by 0009 |
 | [0008](0008-email-identity-normalization.md) | Email identity normalization and case-insensitive uniqueness | Accepted |
+| [0009](0009-api-error-response-conventions.md) | API error response conventions | Accepted |
+| [0010](0010-request-correlation-and-structured-logging.md) | Request correlation and structured logging | Accepted |
+| [0011](0011-continuous-integration.md) | Continuous integration and required checks | Accepted |
