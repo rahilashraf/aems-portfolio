@@ -29,6 +29,20 @@ requests.
   same services and invariants — there is no bypass path.
 - **Concurrency regression tests** with real transactions and synchronized threads.
 
+## Clarifications (Batch 1 review)
+
+- **Provisioning lifecycle.** Organizations are created in `provisioning` status (tenant API
+  closed) and become `active` only inside the transaction that accepts the initial Owner
+  invitation. There is no manual activation, so an active organization never lacks an active Owner.
+- **Global deactivation across organizations.** Lock the user row, then every active organization
+  where the user is an active Owner in ascending id order; re-count other active Owners (active
+  membership and active account) in each; reject with all blocking organizations listed if any
+  would reach zero.
+- **Stale actor permissions.** All authorization-sensitive mutations take the organization row
+  lock, re-load the actor's membership and effective permissions inside the transaction, and
+  re-check permission and escalation rules before applying changes. The request-level check is a
+  fast pre-check; the in-transaction check is authoritative.
+
 ## Alternatives considered
 
 - *Django built-in Group/Permission*: global, tied to content types, cannot express per-tenant roles.

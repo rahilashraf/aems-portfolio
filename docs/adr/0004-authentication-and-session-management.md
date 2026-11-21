@@ -35,6 +35,20 @@ password change, logout and deactivation, and abuse protection that is correct u
 - SimpleJWT supplies token encoding/validation primitives; its blacklist app is not used because
   the session model supersedes it.
 
+## Clarifications (Batch 1 review)
+
+- **Replay revocation commits independently of the error response.** The rotation service returns
+  a `REUSE_DETECTED` outcome after its transaction commits the revocation and the security audit
+  event; the view maps the outcome to 401. It never raises inside the atomic block, and
+  `ATOMIC_REQUESTS` stays disabled, so the 401 cannot roll the revocation back. Verified by a
+  `transaction=True` test that inspects the database after the 401.
+- **Multi-tab coordination is a frontend requirement.** Browser tabs share the refresh cookie, so
+  the frontend must serialize refreshes across tabs (Web Locks API with a `BroadcastChannel`
+  hand-off and a token-free fallback), not only within one tab. A server-side grace window would
+  weaken replay detection and would need its own ADR.
+- **Deactivation across organizations** is blocked if it would leave any active organization
+  without an active Owner (ADR-0005).
+
 ## Alternatives considered
 
 - *Django session cookies only*: simpler and secure for same-site browsers, but unsuitable for

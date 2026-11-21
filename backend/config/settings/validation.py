@@ -1,12 +1,14 @@
-"""Fail-fast validation of security-critical production configuration.
+"""Fail-fast validation of security-critical configuration.
 
-Kept separate from ``production.py`` so the rules are unit-testable without re-importing settings.
+Kept separate from the settings modules so the rules are unit-testable without re-importing
+settings.
 """
 
 from collections.abc import Sequence
 
 from django.core.exceptions import ImproperlyConfigured
 
+SUPPORTED_DATABASE_ENGINE = "django.db.backends.postgresql"
 MIN_SECRET_KEY_LENGTH = 50
 MIN_SECRET_KEY_UNIQUE_CHARS = 5
 _INSECURE_MARKERS = ("insecure", "change-me", "changeme", "dev-only", "test-only", "example")
@@ -39,4 +41,19 @@ def validate_production_settings(
         raise ImproperlyConfigured(msg)
     if "*" in allowed_hosts:
         msg = "DJANGO_ALLOWED_HOSTS must not contain '*' in production."
+        raise ImproperlyConfigured(msg)
+
+
+def validate_database_engine(engine: str) -> None:
+    """Reject any database backend other than PostgreSQL, in every environment.
+
+    AEMS relies on PostgreSQL-specific behaviour (functional unique constraints, row locking,
+    JSONB, triggers, and future row-level security). Running on SQLite or another engine would
+    silently weaken those guarantees, so startup fails instead.
+    """
+    if engine != SUPPORTED_DATABASE_ENGINE:
+        msg = (
+            f"Unsupported database engine {engine!r}: DATABASE_URL must point to PostgreSQL "
+            f"({SUPPORTED_DATABASE_ENGINE})."
+        )
         raise ImproperlyConfigured(msg)

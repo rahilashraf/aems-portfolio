@@ -83,7 +83,7 @@ django_settings_module = "config.settings.test"
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py"]
-testpaths = ["apps", "config", "tests"]
+testpaths = ["apps", "config", "scripts"]
 addopts = [
     "--strict-markers",
     "--strict-config",
@@ -95,7 +95,7 @@ filterwarnings = ["error"]
 branch = true
 # Measure settings modules imported in subprocess-based tests (production settings checks).
 patch = ["subprocess"]
-source = ["apps", "config"]
+source = ["apps", "config", "scripts"]
 omit = ["*/migrations/*", "*/tests/*", "config/asgi.py", "config/wsgi.py", "manage.py"]
 
 [tool.coverage.report]

@@ -47,6 +47,18 @@ environment, automated tests, and CI.
    isolation suites, lint, types, dependency audit, Docker build, 90% coverage gate, least-privilege
    permissions and SHA-pinned actions (§12).
 
+### Clarifications from the Batch 1 review (documentation only)
+
+These refine designs for later batches; none is implemented in Batch 1.
+
+| Topic | Where | Batch |
+|---|---|---|
+| Organization provisioning lifecycle (no active organization without an active Owner) | §5.3, §6.3 | 4, 7 |
+| Global deactivation across multiple organizations | §4.4, §6.3 | 3, 6 |
+| Refresh replay revocation commits even though the API returns 401 | §4.2 | 3 |
+| Concurrent changes to the acting user's own permissions | §6.4 | 6 |
+| Frontend refresh coordination across browser tabs | §4.2 | frontend phase |
+
 ---
 
 ## 2. Architecture overview
@@ -203,9 +215,27 @@ Design ([ADR-0004](adr/0004-authentication-and-session-management.md)):
      hashed `jti`, commit. Only one concurrent request can win this compare-and-swap.
   5. If `jti` does not match (an already-rotated token was replayed) → **reuse detected**: revoke
      the whole session (family), commit, record `auth.refresh_reuse_detected` audit event, return 401.
-  - Trade-off: two browser tabs refreshing simultaneously with the same token cause the loser to
-    be treated as reuse and the session to be revoked. This is the secure default; the frontend
-    will serialize refreshes (single-flight). Documented in ADR-0004.
+  - **Replay revocation must commit even though the response is an authentication error.** The
+    rotation service never raises inside its `transaction.atomic()` block on the replay path:
+    it revokes the session, writes the security audit event, lets the block commit, and *returns*
+    a `REUSE_DETECTED` outcome. The view converts that outcome into the 401 response after the
+    transaction has committed. Raising an exception inside the atomic block (or enabling
+    `ATOMIC_REQUESTS`) would roll the revocation back and leave the stolen token family usable.
+    A `transaction=True` regression test asserts that, after the 401, the session row is revoked
+    in the database and the audit event exists.
+  - Trade-off: two concurrent refreshes with the same token cause the loser to be treated as reuse
+    and the session to be revoked. This is the secure default (ADR-0004).
+  - **Frontend requirement — coordination across tabs, not only within a tab.** All tabs of the
+    same browser share one refresh cookie, so per-tab single-flight is insufficient. The frontend
+    must serialize refreshes across tabs with the Web Locks API (`navigator.locks.request` on a
+    single named lock), re-check after acquiring the lock whether another tab has already
+    refreshed (shared via `BroadcastChannel`), and only then call the refresh endpoint. Because the
+    browser updates the shared cookie after each rotation, the next tab to acquire the lock sends
+    the new refresh token. A fallback for browsers without Web Locks (e.g. a `localStorage`-event
+    based mutex that stores no tokens) must be designed in the frontend phase. Access tokens
+    remain in memory per tab and are never written to `localStorage`/`sessionStorage`; if tokens
+    are shared via `BroadcastChannel`, they stay in memory only. Any server-side grace window for
+    concurrent refreshes would weaken replay detection and requires a separate ADR.
 - **Access-token validation on every request**: signature/expiry, then one query joining
   `AuthSession` + `User`; reject if session revoked/expired or user inactive. This makes logout,
   password change, deactivation, and reuse revocation effective **immediately** for access tokens,
@@ -234,7 +264,9 @@ Design ([ADR-0004](adr/0004-authentication-and-session-management.md)):
   somehow left active.
 - **Deactivation** (`is_active=False`, by platform staff): revokes all sessions in the same
   transaction; per-request checks reject the user immediately. Deactivation is blocked if the user
-  is the last active Owner of any active organization (§6.3).
+  is the last active Owner of **any** active organization, including when the user belongs to
+  several organizations; the error lists every blocking organization so ownership can be
+  transferred first. Locking and ordering rules are in §6.3.
 - Membership suspension/removal takes effect immediately because membership is resolved per request.
 
 ### 4.5 Authentication abuse protection
@@ -313,7 +345,7 @@ relationship to an organization (status, roles) lives on `Membership`.
 ### 5.3 Models
 
 - **`organizations.Organization`** — `id`, `name`, `slug` (unique), `organization_type`
-  (`school`/`university`/`training`/`other`), `status` (`active`/`suspended`), `timezone`
+  (`school`/`university`/`training`/`other`), `status` (`provisioning`/`active`/`suspended`), `timezone`
   (IANA), `created_at`, `updated_at`, `created_by`.
 - **`organizations.Membership`** (tenant-scoped) — `id`, `organization`, `user`, `status`
   (`active`/`suspended`), `joined_at`, `roles` (through `MembershipRole`).
@@ -326,6 +358,26 @@ relationship to an organization (status, roles) lives on `Membership`.
 
 Organizations are created by platform administrators only (D2). Creation seeds system roles and
 invites the initial Owner, atomically.
+
+**Provisioning lifecycle.** Because the initial Owner exists only after accepting an invitation,
+an organization is never created `active`. `status` has three values:
+
+| Status | Meaning | Tenant API |
+|---|---|---|
+| `provisioning` | Created by a platform administrator; initial Owner invitation pending | Closed: every tenant endpoint returns 404; only the invitation preview/accept flow can reach it |
+| `active` | Has ≥ 1 active Owner; the ownership invariant (§6.3) applies | Open (membership + permission rules) |
+| `suspended` | Disabled by a platform administrator | Closed |
+
+- `provisioning → active` happens **only** inside the invitation-acceptance transaction for an
+  invitation carrying the Owner role: lock the organization row, lock the invitation, create the
+  Owner membership, set `active`, write audit events, commit. If any step fails, the organization
+  stays `provisioning`.
+- Platform administrators can revoke and reissue the initial Owner invitation while
+  `provisioning`; there is no manual "activate" operation, so an active organization without an
+  active Owner cannot be created.
+- `suspended → active` reactivation re-checks that an active Owner exists, under the same lock.
+- A database `CHECK` constraint cannot express "has an Owner"; the invariant is enforced by
+  services under lock and covered by tests (including the provisioning flow).
 
 ### 5.4 Future RLS requirements (Phase 2 gate)
 
@@ -386,8 +438,27 @@ role from a membership, deactivating a user, accepting a role change — go thro
 4. Count remaining active Owners excluding the target; if zero → `LastOwnerError` (HTTP 409).
 5. Apply the change and write the audit event in the same transaction.
 
-For user deactivation, every active organization in which the user is an Owner is locked in
-deterministic (id) order to avoid deadlocks.
+Applies only to `active` organizations; `provisioning` organizations are governed by the
+lifecycle in §5.3.
+
+**Global account deactivation** (one user, possibly Owner in many organizations), in one
+transaction:
+
+1. Lock the user row (`SELECT … FOR UPDATE`) so two deactivations of the same user serialize.
+2. Find every `active` organization where the user holds an active Owner membership and lock
+   those organization rows **in ascending id order** (deterministic order prevents deadlocks with
+   other multi-organization operations).
+3. For each locked organization, count active Owners **other than this user** whose membership is
+   active *and* whose user account is active.
+4. If any organization would be left with zero, abort with `LastOwnerError` listing all blocking
+   organizations; nothing is changed.
+5. Otherwise set `is_active=False`, revoke all sessions, write audit events, commit.
+
+Because every operation that can reduce an organization's active-Owner set — membership removal or
+suspension, Owner role removal, and account deactivation — locks the affected organization rows
+first, two co-Owners deactivated concurrently cannot both succeed: the second transaction waits
+for the first and then sees the committed deactivation. Concurrency regression tests cover
+co-Owners across two organizations deactivated simultaneously.
 
 ### 6.4 Escalation and Owner-level rules
 
@@ -402,6 +473,20 @@ deterministic (id) order to avoid deadlocks.
 - **Platform administrators** use separate `/platform/` endpoints that call the same services —
   they cannot bypass invariants either, and they do not get implicit tenant access through the
   tenant API.
+- **Concurrent changes to the actor's own permissions.** Permissions computed at the start of a
+  request can be stale by the time a sensitive mutation commits (e.g. the actor's role is
+  removed, or their role loses `roles.manage`, by a concurrent request). Every authorization-
+  sensitive mutation (role create/update/delete, role permission changes, member role assignment,
+  membership status changes, invitations granting roles) therefore:
+  1. takes the organization row lock (§6.3) — all RBAC mutations for an organization serialize on it;
+  2. **re-loads the actor's membership and effective permissions inside the locked transaction**
+     and re-checks the required permission and the escalation rules against that fresh state,
+     rejecting with 403 if they no longer hold;
+  3. only then applies the change.
+  The request-level permission check remains as a fast early rejection; the in-transaction check
+  is authoritative. Regression tests race an actor's mutation against the concurrent removal of
+  that actor's permission and assert that the mutation is rejected or ordered strictly before
+  the removal — never applied with revoked authority.
 
 ### 6.5 Tests
 

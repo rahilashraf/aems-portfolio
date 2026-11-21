@@ -1,7 +1,11 @@
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
-from config.settings.validation import validate_production_settings, validate_secret_key
+from config.settings.validation import (
+    validate_database_engine,
+    validate_production_settings,
+    validate_secret_key,
+)
 
 STRONG_KEY = "k3J9#vQ2!mZ8@xL5$wR7%tY1^pN4&bH6*cF0(gD3)sA9-eU2+iO8=jK5_lM7~nB1"
 HOSTS = ["api.example.org"]
@@ -50,3 +54,22 @@ class TestValidateProductionSettings:
             validate_production_settings(
                 secret_key=STRONG_KEY, debug=False, allowed_hosts=["*", "api.example.org"]
             )
+
+
+class TestValidateDatabaseEngine:
+    def test_accepts_postgresql(self) -> None:
+        validate_database_engine("django.db.backends.postgresql")
+
+    @pytest.mark.parametrize(
+        "engine",
+        [
+            "django.db.backends.sqlite3",
+            "django.db.backends.mysql",
+            "django.db.backends.oracle",
+            "django.contrib.gis.db.backends.postgis",
+            "",
+        ],
+    )
+    def test_rejects_other_engines(self, engine: str) -> None:
+        with pytest.raises(ImproperlyConfigured, match="Unsupported database engine"):
+            validate_database_engine(engine)

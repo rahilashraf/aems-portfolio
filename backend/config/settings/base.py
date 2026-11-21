@@ -9,6 +9,8 @@ from typing import Any
 
 import environ
 
+from .validation import validate_database_engine
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env()
@@ -47,6 +49,7 @@ ASGI_APPLICATION = "config.asgi.application"
 DATABASES: dict[str, Any] = {
     "default": env.db_url("DATABASE_URL"),
 }
+validate_database_engine(DATABASES["default"].get("ENGINE", ""))
 DATABASES["default"]["ATOMIC_REQUESTS"] = False  # explicit transactions in services (ADR-0006)
 DATABASES["default"]["CONN_MAX_AGE"] = env.int("DATABASE_CONN_MAX_AGE", default=60)
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True

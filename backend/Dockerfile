@@ -53,8 +53,10 @@ USER aems:aems
 ENV DJANGO_SETTINGS_MODULE=config.settings.production
 EXPOSE 8000
 
+# Probes the local socket while presenting the first DJANGO_ALLOWED_HOSTS entry as the Host
+# header, so Django host validation applies unchanged (see scripts/healthcheck.py).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live/', timeout=4).status == 200 else 1)"]
+    CMD ["python", "-m", "scripts.healthcheck"]
 
 CMD ["gunicorn", "config.wsgi:application", \
      "--bind", "0.0.0.0:8000", \

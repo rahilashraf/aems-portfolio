@@ -3,6 +3,9 @@
 # Host targets use uv in backend/ (fast feedback); `docker-*` targets run inside the compose stack.
 
 SHELL := /bin/bash
+# Every recipe line runs with errexit, nounset and pipefail, so a failure anywhere in a
+# pipeline (e.g. the dependency export feeding pip-audit) fails the target.
+.SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
 # Load local development variables (if present) for host-side commands.
@@ -56,7 +59,7 @@ docker-migrate: ## Apply migrations inside the backend container
 	$(COMPOSE) exec backend python manage.py migrate
 
 # ------------------------------------------------------------------ django (host)
-.PHONY: run migrate makemigrations check-migrations shell
+.PHONY: run migrate makemigrations check-migrations shell sendtestemail docker-sendtestemail
 run: ## Run the dev server on the host (needs the compose db running)
 	$(MANAGE) runserver
 
@@ -71,6 +74,14 @@ check-migrations: ## Fail if models and migrations are out of sync
 
 shell: ## Django shell (host)
 	$(MANAGE) shell
+
+TEST_EMAIL ?= dev@example.test
+
+sendtestemail: ## Send a test email via EMAIL_URL (host); view it in Mailpit
+	$(MANAGE) sendtestemail $(TEST_EMAIL)
+
+docker-sendtestemail: ## Send a test email from the backend container to Mailpit
+	$(COMPOSE) exec backend python manage.py sendtestemail $(TEST_EMAIL)
 
 # ------------------------------------------------------------------ quality (host)
 .PHONY: test lint format typecheck audit security deploy-check qa
@@ -88,15 +99,18 @@ format: ## Auto-format and apply safe lint fixes
 typecheck: ## Static type checking (mypy strict)
 	$(UV) run mypy .
 
+# Overridable only so the failure-propagation behaviour can be verified (e.g. AUDIT_EXPORT=false).
+AUDIT_EXPORT ?= $(UV) export --frozen --all-groups --no-emit-project --format requirements-txt
+
 audit: ## Check dependencies for known vulnerabilities
-	$(UV) export --frozen --all-groups --no-emit-project --format requirements-txt \
+	$(AUDIT_EXPORT) \
 		| $(UV) run pip-audit --strict --disable-pip --require-hashes --requirement /dev/stdin
 
 security: ## Static security analysis
 	$(UV) run bandit -c pyproject.toml -r apps config
 
 deploy-check: ## Django deployment checklist against production settings
-	DJANGO_SETTINGS_MODULE=config.settings.production \
+	DJANGO_SETTINGS_MODULE=config.settings.production DJANGO_DEBUG=false \
 	DJANGO_SECRET_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_ALLOWED_HOSTS=api.example.org \
 	DATABASE_URL=postgres://u:p@localhost:5432/db \

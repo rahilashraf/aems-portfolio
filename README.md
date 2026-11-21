@@ -44,6 +44,13 @@ make up                  # builds and starts db, backend, mailpit
 | Backend liveness | http://localhost:8000/health/live/ |
 | Backend readiness | http://localhost:8000/health/ready/ |
 | Mailpit (email UI) | http://localhost:8025/ |
+| Mailpit SMTP (host-based Django) | `localhost:1025` |
+
+All ports bind to `127.0.0.1` only; override them with the `*_HOST_PORT` variables in `.env`.
+Containerized Django sends mail to `mailpit:1025`; host-based Django uses `EMAIL_URL` from `.env`
+(`smtp://localhost:1025`). To check delivery, run `make sendtestemail` (host) or
+`docker compose exec backend python manage.py sendtestemail dev@example.test` and open the
+Mailpit UI.
 
 Run the tests inside the container:
 
@@ -91,8 +98,30 @@ Responses are uncached and never include internal error details.
 ## Configuration
 
 All configuration comes from environment variables (see [`.env.example`](.env.example)).
-`config.settings.production` refuses to start when `DJANGO_DEBUG` is true, `DJANGO_SECRET_KEY`
-is missing, short, or a placeholder, or `DJANGO_ALLOWED_HOSTS` is empty or contains `*`.
+
+Every environment refuses to start unless `DATABASE_URL` resolves to the PostgreSQL backend
+(`postgres://`, `postgresql://`, or `pgsql://`); SQLite and other engines are rejected.
+
+### Production configuration
+
+`config.settings.production` refuses to start when:
+
+- `DJANGO_DEBUG` is true (it is validated, never silently overridden);
+- `DJANGO_SECRET_KEY` is missing, shorter than 50 characters, low-variety, or a placeholder;
+- `DJANGO_ALLOWED_HOSTS` is empty or contains `*`.
+
+**Trusted TLS proxy (`DJANGO_BEHIND_TLS_PROXY`, default `false`).** When enabled, Django treats a
+request as HTTPS if it carries `X-Forwarded-Proto: https`. Enable it **only** when every request
+reaches Django through a trusted TLS-terminating reverse proxy (load balancer, ingress) that
+**removes any client-supplied `X-Forwarded-Proto` header and overwrites it** with the scheme it
+actually received, and when Django is not reachable any other way. Otherwise clients could forge
+the header and plain-HTTP requests would be treated as secure.
+
+**Container health check.** The production image's `HEALTHCHECK` runs
+[`scripts/healthcheck.py`](backend/scripts/healthcheck.py), which calls `/health/live/` on the
+local socket while sending the first `DJANGO_ALLOWED_HOSTS` entry as the `Host` header. Host
+validation therefore stays fully enforced: no loopback address or wildcard needs to be added to
+`ALLOWED_HOSTS`.
 
 The application connects to PostgreSQL as a non-superuser role (`aems_app`) created by
 [`docker/postgres/init/01-create-app-role.sh`](docker/postgres/init/01-create-app-role.sh).

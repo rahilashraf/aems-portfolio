@@ -5,15 +5,18 @@ and checked (``manage.py check --deploy``) in CI.
 """
 
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, SECRET_KEY, env
+from .base import ALLOWED_HOSTS, DEBUG, SECRET_KEY, env
 from .validation import validate_production_settings
 
-DEBUG = False
-
+# DEBUG comes from the environment (via base) and is validated, not silently overridden:
+# DJANGO_DEBUG=true must stop production startup rather than be ignored.
 validate_production_settings(secret_key=SECRET_KEY, debug=DEBUG, allowed_hosts=ALLOWED_HOSTS)
 
-# Only honour X-Forwarded-Proto when running behind a trusted TLS-terminating proxy.
-if env.bool("DJANGO_BEHIND_TLS_PROXY", default=True):
+# Opt-in only. Enable ONLY when every request reaches Django through a trusted TLS-terminating
+# reverse proxy that strips any client-supplied X-Forwarded-Proto header and overwrites it with
+# the scheme it actually received. Without such a proxy, clients could spoof the header and make
+# plain-HTTP requests appear secure. See README "Production configuration".
+if env.bool("DJANGO_BEHIND_TLS_PROXY", default=False):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=True)
