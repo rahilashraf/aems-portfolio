@@ -59,7 +59,7 @@ docker-migrate: ## Apply migrations inside the backend container
 	$(COMPOSE) exec backend python manage.py migrate
 
 # ------------------------------------------------------------------ django (host)
-.PHONY: run migrate makemigrations check-migrations shell sendtestemail docker-sendtestemail
+.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables shell sendtestemail docker-sendtestemail
 run: ## Run the dev server on the host (needs the compose db running)
 	$(MANAGE) runserver
 
@@ -69,8 +69,14 @@ migrate: ## Apply migrations (host)
 makemigrations: ## Create migrations (host)
 	$(MANAGE) makemigrations
 
+check: ## Django system checks (incl. the public-endpoint allowlist)
+	$(MANAGE) check --fail-level WARNING
+
 check-migrations: ## Fail if models and migrations are out of sync
 	$(MANAGE) makemigrations --check --dry-run
+
+check-no-auth-tables: ## Fail if Django's default auth/admin/session tables exist in the database
+	$(MANAGE) verify_no_default_tables
 
 shell: ## Django shell (host)
 	$(MANAGE) shell
@@ -84,9 +90,11 @@ docker-sendtestemail: ## Send a test email from the backend container to Mailpit
 	$(COMPOSE) exec backend python manage.py sendtestemail $(TEST_EMAIL)
 
 # ------------------------------------------------------------------ quality (host)
-.PHONY: test lint format typecheck audit security deploy-check qa
-test: ## Run tests with coverage (90% gate)
-	$(UV) run pytest --cov
+.PHONY: test lint format typecheck audit security secrets deploy-check schema schema-check qa
+PYTEST_ARGS ?=
+
+test: ## Run tests with coverage (90% gate); extra args via PYTEST_ARGS
+	$(UV) run pytest --cov $(PYTEST_ARGS)
 
 lint: ## Lint and check formatting
 	$(UV) run ruff check .
@@ -107,13 +115,33 @@ audit: ## Check dependencies for known vulnerabilities
 		| $(UV) run pip-audit --strict --disable-pip --require-hashes --requirement /dev/stdin
 
 security: ## Static security analysis
-	$(UV) run bandit -c pyproject.toml -r apps config
+	$(UV) run bandit -c pyproject.toml -r apps config scripts
+
+secrets: ## Scan tracked files for committed secrets (detect-secrets baseline)
+	uv run --project $(BACKEND) pre-commit run detect-secrets --all-files
+
+# OpenAPI contract. Generated with the test settings so the output never depends on a local .env.
+SCHEMA_FILE := docs/api/openapi.yaml
+# Scratch location for the drift check (git-ignored, overwritten on each run).
+SCHEMA_CHECK_FILE := backend/.schema-check/openapi.yaml
+SPECTACULAR := DJANGO_SETTINGS_MODULE=config.settings.test $(UV) run python manage.py spectacular \
+	--validate --fail-on-warn
+
+schema: ## Regenerate the committed OpenAPI schema (docs/api/openapi.yaml)
+	$(SPECTACULAR) --file ../$(SCHEMA_FILE)
+
+schema-check: ## Fail if the committed OpenAPI schema differs from freshly generated output
+	mkdir -p $(dir $(SCHEMA_CHECK_FILE))
+	$(SPECTACULAR) --file ../$(SCHEMA_CHECK_FILE)
+	diff -u $(SCHEMA_FILE) $(SCHEMA_CHECK_FILE)
+	@echo "OK: $(SCHEMA_FILE) matches the generated schema"
 
 deploy-check: ## Django deployment checklist against production settings
 	DJANGO_SETTINGS_MODULE=config.settings.production DJANGO_DEBUG=false \
+	DJANGO_API_DOCS_ENABLED=false DJANGO_CORS_ALLOWED_ORIGINS= DJANGO_LOG_FORMAT=json \
 	DJANGO_SECRET_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_ALLOWED_HOSTS=api.example.org \
 	DATABASE_URL=postgres://u:p@localhost:5432/db \
 	$(UV) run python manage.py check --deploy --fail-level WARNING
 
-qa: lint typecheck test security audit check-migrations deploy-check ## Run every quality gate
+qa: lint typecheck test security audit secrets check-migrations schema-check deploy-check ## Run every quality gate

@@ -5,6 +5,7 @@ settings.
 """
 
 from collections.abc import Sequence
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -26,6 +27,27 @@ def validate_secret_key(secret_key: str) -> None:
     if lowered.startswith("django-insecure") or any(m in lowered for m in _INSECURE_MARKERS):
         msg = "DJANGO_SECRET_KEY looks like a placeholder; generate a random production secret."
         raise ImproperlyConfigured(msg)
+
+
+def validate_log_format(log_format: str, supported: Sequence[str]) -> None:
+    if log_format not in supported:
+        msg = f"DJANGO_LOG_FORMAT must be one of {', '.join(supported)}; got {log_format!r}."
+        raise ImproperlyConfigured(msg)
+
+
+def validate_cors_origins(origins: Sequence[str], *, require_https: bool) -> None:
+    """Reject wildcard, ``null`` and malformed CORS origins (and plain HTTP when required)."""
+    for origin in origins:
+        parts = urlsplit(origin)
+        if origin in ("*", "null") or parts.scheme not in ("http", "https") or not parts.netloc:
+            msg = f"Invalid CORS origin {origin!r}: use an explicit scheme://host[:port] origin."
+            raise ImproperlyConfigured(msg)
+        if parts.path not in ("", "/") or parts.query or parts.fragment:
+            msg = f"Invalid CORS origin {origin!r}: an origin has no path, query or fragment."
+            raise ImproperlyConfigured(msg)
+        if require_https and parts.scheme != "https":
+            msg = f"CORS origin {origin!r} must use https in production."
+            raise ImproperlyConfigured(msg)
 
 
 def validate_production_settings(

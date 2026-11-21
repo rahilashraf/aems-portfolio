@@ -29,3 +29,6 @@ node_modules/
 .vscode/
 *.swp
 .DS_Store
+
+# OpenAPI drift-check scratch output (make schema-check)
+backend/.schema-check/
