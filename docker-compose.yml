@@ -1,0 +1,52 @@
+# Local development environment. Not for production use.
+name: aems
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      AEMS_DB_NAME: ${AEMS_DB_NAME:-aems}
+      AEMS_DB_USER: ${AEMS_DB_USER:-aems_app}
+      AEMS_DB_PASSWORD: ${AEMS_DB_PASSWORD:?set AEMS_DB_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${AEMS_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.local
+      DATABASE_URL: postgres://${AEMS_DB_USER:-aems_app}:${AEMS_DB_PASSWORD}@db:5432/${AEMS_DB_NAME:-aems}
+      EMAIL_URL: smtp://mailpit:1025
+    volumes:
+      - ./backend:/app
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025"
+      # SMTP for host-based Django (EMAIL_URL=smtp://localhost:1025); loopback only.
+      - "127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-1025}:1025"
+
+volumes:
+  postgres-data:
