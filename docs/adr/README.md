@@ -1,0 +1,17 @@
+# Architecture Decision Records
+
+ADRs record significant architectural decisions, their context, and their consequences, using a
+lightweight [Michael Nygard](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions)
+format. New ADRs copy [`template.md`](template.md) and take the next number. Accepted ADRs are not
+rewritten; a change of direction is recorded in a new ADR that supersedes the old one.
+
+| ADR | Title | Status |
+|---|---|---|
+| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
+| [0002](0002-repository-and-application-architecture.md) | Repository and application architecture | Accepted |
+| [0003](0003-tenant-isolation.md) | Tenant isolation: shared schema, organization-scoped rows | Accepted |
+| [0004](0004-authentication-and-session-management.md) | Authentication and session management | Accepted |
+| [0005](0005-rbac-and-ownership-invariants.md) | Organization-scoped RBAC and ownership invariants | Accepted |
+| [0006](0006-audit-logging.md) | Audit logging | Accepted |
+| [0007](0007-api-error-format.md) | API error format (RFC 9457) | Accepted |
+| [0008](0008-email-identity-normalization.md) | Email identity normalization and case-insensitive uniqueness | Accepted |
