@@ -190,6 +190,30 @@ def authenticate_access_token(raw: str) -> AccessContext:
     return AccessContext(user=user, session=session)
 
 
+def session_for_refresh_token(raw: str, *, client_ip: str | None = None) -> AuthSession | None:
+    """The session a *valid* refresh token belongs to, or ``None``.
+
+    The session is resolved by **both** signed claims: ``sid`` and ``sub`` (the session owner). A
+    session id alone never identifies a session to act on. A signature-valid token whose ``sid``
+    names another user's session can only arise from a leaked signing key or a defect, so it is
+    reported as a security event and treated as unknown. Invalid or expired tokens return ``None``.
+    """
+    try:
+        claims = decode_refresh_token(raw)
+    except InvalidTokenError:
+        return None
+    session = AuthSession.objects.filter(id=claims.session_id, user_id=claims.user_id).first()
+    if session is None and AuthSession.objects.filter(id=claims.session_id).exists():
+        record_security_event(
+            "auth.session.owner_mismatch",
+            outcome="failure",
+            session_id=claims.session_id,
+            client_ip=client_ip,
+            token_user_id=claims.user_id,
+        )
+    return session
+
+
 def revoke_session(session: AuthSession, reason: str, *, client_ip: str | None = None) -> bool:
     """Revoke one session (idempotent). Returns True if it was active."""
     with transaction.atomic():

@@ -10,7 +10,13 @@ from django.test import Client
 from django.utils import timezone
 
 from apps.accounts.models import AuthSession, RevokeReason, User
-from apps.accounts.sessions import RotationOutcome, create_session, rotate
+from apps.accounts.sessions import (
+    RotationOutcome,
+    create_session,
+    rotate,
+    session_for_refresh_token,
+)
+from apps.accounts.tokens import issue_refresh_token
 
 from .conftest import (
     CSRF_URL,
@@ -264,3 +270,158 @@ class TestCsrf:
             "HTTP_ORIGIN": "http://testserver",
         }
         assert client.post(LOGOUT_URL, **headers).status_code == 204
+
+
+# --------------------------------------------------------------------------- logout binding
+def _forged_refresh(*, user_id: Any, session_id: Any, now: Any = None) -> str:
+    """A refresh token signed with the real key (as after a key leak or a defect)."""
+    token, _jti = issue_refresh_token(
+        user_id=str(user_id),
+        session_id=str(session_id),
+        session_expires_at=timezone.now() + timedelta(days=30),
+        now=now,
+    )
+    return token
+
+
+def _cookie_logout(client: Client, refresh_token: str, **extra: Any) -> Any:
+    client.cookies[REFRESH_COOKIE] = refresh_token
+    if "csrftoken" not in client.cookies:
+        client.get(CSRF_URL)
+    return client.post(
+        LOGOUT_URL,
+        HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value,
+        HTTP_ORIGIN="http://testserver",
+        **extra,
+    )
+
+
+@pytest.mark.django_db
+class TestLogoutTokenBinding:
+    """AEMS-011: logout revokes only the session that the token's ``sid`` *and* ``sub`` name."""
+
+    def test_mismatched_user_and_session_claims_revoke_nothing(
+        self, make_user: Any, events: Any
+    ) -> None:
+        alice = make_user("alice@example.org")
+        bob = make_user("bob@example.org")
+        do_login(bob.email)
+        bobs_session = AuthSession.objects.get(user=bob)
+        forged = _forged_refresh(user_id=alice.pk, session_id=bobs_session.pk)
+
+        response = _cookie_logout(Client(enforce_csrf_checks=True), forged)
+
+        assert response.status_code == 204
+        assert response.cookies[REFRESH_COOKIE].value == ""
+        bobs_session.refresh_from_db()
+        assert bobs_session.revoked_at is None
+        [mismatch] = [e for e in events if e.name == "auth.session.owner_mismatch"]
+        assert mismatch.outcome == "failure"
+        assert mismatch.session_id == str(bobs_session.pk)
+        assert mismatch.metadata == {"token_user_id": str(alice.pk)}
+        [logout] = [e for e in events if e.name == "auth.logout"]
+        assert logout.session_id is None
+        assert logout.metadata == {"revoked": False}
+
+    def test_mismatched_cookie_does_not_block_the_callers_bearer_logout(
+        self, make_user: Any
+    ) -> None:
+        alice = make_user("alice@example.org")
+        bob = make_user("bob@example.org")
+        alice_session = do_login(alice.email)
+        do_login(bob.email)
+        bobs_session = AuthSession.objects.get(user=bob)
+        forged = _forged_refresh(user_id=alice.pk, session_id=bobs_session.pk)
+
+        response = _cookie_logout(alice_session.client, forged, **alice_session.auth)
+
+        assert response.status_code == 204
+        assert AuthSession.objects.get(user=alice).revoked_at is not None
+        assert AuthSession.objects.get(user=bob).revoked_at is None
+
+    def test_unknown_session_is_a_no_op_204(self, user: User, events: Any) -> None:
+        do_login(user.email)
+        forged = _forged_refresh(user_id=user.pk, session_id="00000000-0000-4000-8000-000000000000")
+
+        response = _cookie_logout(Client(enforce_csrf_checks=True), forged)
+
+        assert response.status_code == 204
+        assert response.cookies[REFRESH_COOKIE].value == ""
+        assert AuthSession.objects.get(user=user).revoked_at is None
+        assert "auth.session.owner_mismatch" not in event_names(events)
+
+    def test_already_revoked_session_is_idempotent(self, user: User, login: Any) -> None:
+        session = login(user.email)
+        stored = AuthSession.objects.get(user=user)
+        revoked_at = timezone.now() - timedelta(minutes=5)
+        AuthSession.objects.filter(pk=stored.pk).update(
+            revoked_at=revoked_at, revoke_reason=RevokeReason.USER_REVOKED
+        )
+
+        for _ in range(2):
+            response = session.client.post(LOGOUT_URL, **session.csrf_headers())
+            assert response.status_code == 204
+            assert response.cookies[REFRESH_COOKIE].value == ""
+
+        stored.refresh_from_db()
+        assert stored.revoked_at == revoked_at  # the original revocation is not overwritten
+        assert stored.revoke_reason == RevokeReason.USER_REVOKED
+
+    def test_expired_refresh_token_clears_cookie_without_revoking(
+        self, user: User, login: Any
+    ) -> None:
+        login(user.email)
+        stored = AuthSession.objects.get(user=user)
+        expired = _forged_refresh(
+            user_id=user.pk, session_id=stored.pk, now=timezone.now() - timedelta(days=8)
+        )
+
+        response = _cookie_logout(Client(enforce_csrf_checks=True), expired)
+
+        assert response.status_code == 204
+        assert response.cookies[REFRESH_COOKIE].value == ""
+        stored.refresh_from_db()
+        assert stored.revoked_at is None  # an expired token is no proof of possession
+
+    def test_invalid_cookie_still_requires_csrf(self, user: User, login: Any) -> None:
+        session = login(user.email)
+        client = Client(enforce_csrf_checks=True)
+        client.cookies[REFRESH_COOKIE] = "garbage"
+        response = client.post(LOGOUT_URL, HTTP_ORIGIN="http://testserver", **session.auth)
+        assert response.status_code == 403
+        assert response.json()["code"] == "csrf_failed"
+        assert AuthSession.objects.get(user=user).revoked_at is None
+
+    def test_invalid_cookie_with_valid_bearer_revokes_only_the_bearer_session(
+        self, user: User, login: Any
+    ) -> None:
+        first = login(user.email)
+        second = login(user.email)
+        response = _cookie_logout(Client(enforce_csrf_checks=True), "garbage", **first.auth)
+
+        assert response.status_code == 204
+        assert response.cookies[REFRESH_COOKIE].value == ""
+        assert _me(first.access_token) == 401
+        assert _me(second.access_token) == 200
+
+    def test_bearer_only_logout_revokes_the_bearer_session(self, user: User, login: Any) -> None:
+        first = login(user.email)
+        second = login(user.email)
+        response = Client().post(LOGOUT_URL, **first.auth)
+
+        assert response.status_code == 204
+        assert response.cookies[REFRESH_COOKIE].value == ""
+        assert _me(first.access_token) == 401
+        assert _me(second.access_token) == 200
+        assert Client().post(LOGOUT_URL, **first.auth).status_code == 204  # idempotent
+
+    def test_session_lookup_requires_both_claims(self, make_user: Any) -> None:
+        alice = make_user("alice@example.org")
+        bob = make_user("bob@example.org")
+        tokens = create_session(bob, client_ip=None)
+        bobs_session = AuthSession.objects.get(user=bob)
+
+        assert session_for_refresh_token(tokens.refresh_token) == bobs_session
+        forged = _forged_refresh(user_id=alice.pk, session_id=bobs_session.pk)
+        assert session_for_refresh_token(forged) is None
+        assert session_for_refresh_token("garbage") is None

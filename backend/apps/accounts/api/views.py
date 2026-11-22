@@ -32,8 +32,9 @@ from apps.accounts.sessions import (
     revoke_session,
     revoke_user_sessions,
     rotate,
+    session_for_refresh_token,
 )
-from apps.accounts.tokens import InvalidTokenError, decode_refresh_token
+from apps.accounts.tokens import InvalidTokenError
 from apps.core.api.openapi import PROBLEM_401_EXTENSION
 from apps.core.api.permissions import PublicEndpoint
 from apps.core.api.views import AemsAPIView, AemsGenericAPIView
@@ -178,19 +179,29 @@ class _RefreshRejectedError(exceptions.AuthenticationFailed):
     pass
 
 
-def _lenient_bearer_session_id(request: Request) -> str | None:
-    """Session id from a still-valid bearer token; logout must not fail on an expired one."""
+def _lenient_bearer_session(request: Request) -> AuthSession | None:
+    """Session of a still-valid bearer token; logout must not fail on an expired one.
+
+    ``authenticate_access_token`` resolves the session by the token's signed ``sid`` *and* ``sub``
+    and checks the session and user are still usable.
+    """
     header = get_authorization_header(request).split()
     if len(header) != 2 or header[0].lower() != b"bearer":  # noqa: PLR2004
         return None
     try:
-        return str(authenticate_access_token(header[1].decode("ascii")).session.id)
+        return authenticate_access_token(header[1].decode("ascii")).session
     except (UnicodeDecodeError, InvalidTokenError):
         return None
 
 
 class LogoutView(PublicAuthView):
-    """Revokes the session identified by the refresh cookie (CSRF required) or the bearer token."""
+    """Revokes the session identified by the refresh cookie (CSRF required) or the bearer token.
+
+    Only a signature-valid, unexpired token identifies a session, and the session must belong to
+    the token's user (``sid`` + ``sub``). A client-supplied session id is never trusted on its own.
+    The response is always 204 and the refresh cookie is always cleared (also when it is invalid
+    or expired), so logout is idempotent and reveals nothing about the token.
+    """
 
     @extend_schema(
         operation_id="auth_logout",
@@ -207,20 +218,24 @@ class LogoutView(PublicAuthView):
     def post(self, request: Request) -> Response:
         ip = client_ip(request)
         raw_refresh = refresh_cookie_value(request)
-        session_id: str | None = None
+        session: AuthSession | None = None
         if raw_refresh:
+            # Any request carrying the refresh cookie must pass CSRF, even if the cookie is invalid.
             enforce_csrf(request)
-            try:
-                session_id = decode_refresh_token(raw_refresh).session_id
-            except InvalidTokenError:
-                session_id = None
-        if session_id is None:
-            session_id = _lenient_bearer_session_id(request)
-        if session_id is not None:
-            session = AuthSession.objects.filter(id=session_id).first()
-            if session is not None:
-                revoke_session(session, RevokeReason.LOGOUT, client_ip=ip)
-        record_security_event("auth.logout", outcome="success", session_id=session_id, client_ip=ip)
+            session = session_for_refresh_token(raw_refresh, client_ip=ip)
+        if session is None:
+            session = _lenient_bearer_session(request)
+        revoked = False
+        if session is not None:
+            revoked = revoke_session(session, RevokeReason.LOGOUT, client_ip=ip)
+        record_security_event(
+            "auth.logout",
+            outcome="success",
+            user_id=session.user_id if session is not None else None,
+            session_id=session.id if session is not None else None,
+            client_ip=ip,
+            revoked=revoked,
+        )
         response = Response(status=status.HTTP_204_NO_CONTENT)
         clear_refresh_cookie(response)
         return response
