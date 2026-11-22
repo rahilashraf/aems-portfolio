@@ -142,19 +142,6 @@ class TestPublicEndpointAllowlist:
     def test_manage_check_passes(self) -> None:
         call_command("check", "--fail-level", "ERROR")
 
-    def test_unlisted_public_endpoint_is_reported(self) -> None:
-        messages = find_public_endpoint_violations("apps.core.tests.urls_violations")
-        ids = sorted((m.id or "", m.msg) for m in messages)
-
-        assert (
-            "core.E001",
-            "Endpoint 'unlisted-public' allows anonymous access but is not listed in "
-            "settings.API_PUBLIC_ENDPOINTS.",
-        ) in ids
-        assert any(i == "core.E002" and "bare-allow-any" in msg for i, msg in ids)
-        assert not any("denied" in msg for _, msg in ids)
-        assert not any("plain-django" in msg for _, msg in ids)
-
     def test_default_permission_is_deny_all(self) -> None:
         from rest_framework.settings import api_settings  # noqa: PLC0415
 

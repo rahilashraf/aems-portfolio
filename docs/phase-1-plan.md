@@ -682,5 +682,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 - **django-structlog not adopted** (ADR-0010). A first-party middleware keeps client-IP and
   path-logging policies explicit.
 - **gunicorn access log disabled** in the production image, because it would log query strings.
+- **Review corrections AEMS-007–009** (before merge):
+  - layered allowlist enforcement with a runtime guard and five system checks (ADR-0012);
+  - bounded, cycle-safe log redaction and text sanitization;
+  - client-safe error message conventions (`DomainError`, ADR-0009).
 - **API root endpoint (`GET /api/v1/`)** added as the only Batch 2 API endpoint. It is public, and
   it exercises the allowlist, schema and contract machinery.

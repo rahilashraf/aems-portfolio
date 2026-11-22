@@ -125,7 +125,8 @@ class TestAuthenticationAndAuthorization:
         response = client.get("/test-api/auth-failed/")
 
         body = assert_problem(response, 401, "authentication_failed")
-        assert body["detail"] == "Invalid token."
+        # The view raised AuthenticationFailed("Invalid token."): only the generic text is sent.
+        assert body["detail"] == "Authentication credentials were invalid."
         assert response["WWW-Authenticate"] == 'Bearer realm="api"'
 
     def test_django_permission_denied_is_generic(
@@ -145,7 +146,7 @@ class TestHttpProtocolErrors:
         response = client.get("/test-api/django-404/")
 
         body = assert_problem(response, 404, "not_found")
-        assert body["detail"] == "Not found."
+        assert body["detail"] == "The requested resource was not found."
         _assert_no_leak(response)
 
     def test_method_not_allowed_keeps_allow_header(

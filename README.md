@@ -104,8 +104,11 @@ The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the A
 - **JSON only**: requests are parsed as JSON (`415` otherwise); responses are JSON; datetimes
   are ISO 8601 UTC.
 - **Deny by default**: an endpoint without explicit permissions is unreachable. Public endpoints
-  use `PublicEndpoint` **and** must be listed in `API_PUBLIC_ENDPOINTS`, which is enforced by
-  system checks `core.E001`/`core.E002`. There is no authentication until Batch 3.
+  use `PublicEndpoint` **and** must be listed in `API_PUBLIC_ENDPOINTS`. Every DRF view uses
+  the project base classes (`AemsAPIView` and others), whose runtime guard refuses unauthenticated
+  access to any non-allowlisted endpoint. System checks `core.E001`–`core.E005` catch
+  misconfiguration at startup ([ADR-0012](docs/adr/0012-api-access-control-enforcement.md)).
+  There is no authentication until Batch 3.
 - **Errors**: RFC 9457 Problem Details (`application/problem+json`) with a stable `code` and the
   `request_id` ([ADR-0009](docs/adr/0009-api-error-response-conventions.md)). `WWW-Authenticate`,
   `Retry-After` and `Allow` headers are preserved.

@@ -23,10 +23,27 @@ type URI, which AEMS does not own or serve.
 3. **`errors` entries:** `{detail, code, pointer}` for request-body errors, where `pointer` is an
    RFC 6901 JSON Pointer in URI-fragment form (`#/items/1/sku`, `#` for non-field errors); and
    `{detail, code, parameter}` for query-parameter errors (pagination, filtering, ordering).
-4. **Client-safe messages only.** Django's `Http404` and `PermissionDenied` messages can name
-   models, lookups or internal rules, so they are replaced with generic text. DRF `APIException`
-   messages are intended for clients and are kept. Unhandled exceptions return a generic
-   `500 internal_error`; the traceback is logged server-side with the request ID.
+4. **Client-safe messages only (AEMS-009).**
+   - **Domain errors** that need a specific client message subclass `DomainError`, for example
+     `ConflictError` and `PageNotFoundError`. Their messages must be static and must contain no
+     secrets, credentials, internal identifiers, SQL, file paths or exception text. Only
+     `DomainError` messages are passed through, and they are still sanitized and capped at 300
+     characters as a safety net.
+   - **All other exceptions** get a fixed, generic message chosen by type, whatever text they
+     were raised with. This covers DRF built-ins (`ParseError`, `AuthenticationFailed`,
+     `PermissionDenied`, `NotFound`, `Throttled` and others), Django's `Http404` and
+     `PermissionDenied`, and unknown `APIException` subclasses. Parser messages, for example, are
+     never echoed.
+   - **Validation messages** are field-level and meant for clients, but they must not echo
+     submitted values. As a safety net:
+     - errors on sensitive fields (password, token, secret, key and similar names anywhere in the
+       pointer path) get a generic message;
+     - every message is text-sanitized and capped;
+     - error codes must match `^[a-z][a-z0-9_]{0,63}$`;
+     - at most 100 errors are reported.
+   - **Unhandled exceptions** return a generic `500 internal_error`. The traceback is logged
+     server-side with the request ID, without local variables and after text sanitization
+     (ADR-0010).
 5. **Headers are preserved:** DRF's default handler still runs first, so `WWW-Authenticate`
    (401), `Retry-After` (429) and `Allow` (405) are retained.
 6. **Errors outside DRF** (unknown URLs, disallowed hosts, CSRF failures, crashes in plain Django

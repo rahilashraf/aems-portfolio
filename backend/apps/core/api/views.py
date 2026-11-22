@@ -7,15 +7,34 @@ from django.http import Http404, HttpRequest, HttpResponseBase
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from rest_framework import serializers
+from rest_framework.generics import GenericAPIView
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.viewsets import GenericViewSet, ViewSet
 
 from apps.core.errors import page_not_found
 
-from .permissions import PublicEndpoint
+from .permissions import PublicAccessGuard, PublicEndpoint
 
 API_VERSION = "v1"
+
+
+# Project base classes: every DRF view must include PublicAccessGuard (system check core.E004).
+class AemsAPIView(PublicAccessGuard, APIView):
+    pass
+
+
+class AemsGenericAPIView(PublicAccessGuard, GenericAPIView[Any]):
+    pass
+
+
+class AemsViewSet(PublicAccessGuard, ViewSet):
+    pass
+
+
+class AemsGenericViewSet(PublicAccessGuard, GenericViewSet[Any]):
+    pass
 
 
 class ApiRootSerializer(serializers.Serializer[Any]):
@@ -23,7 +42,7 @@ class ApiRootSerializer(serializers.Serializer[Any]):
     api_version = serializers.CharField()
 
 
-class ApiRootView(APIView):
+class ApiRootView(AemsAPIView):
     """Public API entry point. Exposes no version numbers of the software stack."""
 
     permission_classes = [PublicEndpoint]
@@ -54,13 +73,13 @@ class DocsGateMixin:
         return response
 
 
-class SchemaView(DocsGateMixin, SpectacularAPIView):
+class SchemaView(DocsGateMixin, PublicAccessGuard, SpectacularAPIView):
     pass
 
 
-class SwaggerView(DocsGateMixin, SpectacularSwaggerView):
+class SwaggerView(DocsGateMixin, PublicAccessGuard, SpectacularSwaggerView):
     pass
 
 
-class RedocView(DocsGateMixin, SpectacularRedocView):
+class RedocView(DocsGateMixin, PublicAccessGuard, SpectacularRedocView):
     pass

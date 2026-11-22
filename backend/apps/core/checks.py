@@ -1,74 +1,111 @@
-"""System checks enforcing the explicit public-endpoint allowlist.
+"""System checks enforcing API access-control conventions (ADR-0012).
 
-- ``core.E001``: a DRF view grants anonymous access (``AllowAny`` or a subclass) but its URL name
-  is not in ``settings.API_PUBLIC_ENDPOINTS``.
-- ``core.E002``: a DRF view uses bare ``AllowAny`` instead of the explicit ``PublicEndpoint``.
+Run with every ``manage.py`` command (and in CI via ``make check``), so misconfiguration fails
+before a server starts:
 
-Runs with every ``manage.py`` command (and in CI), so a new unauthenticated endpoint cannot be
-added accidentally.
+- ``core.E001``: a view uses ``PublicEndpoint`` but its URL name is not in
+  ``settings.API_PUBLIC_ENDPOINTS`` (or it has no URL name).
+- ``core.E002``: a view grants anonymous access with ``AllowAny`` or a subclass other than
+  ``PublicEndpoint``.
+- ``core.E003``: a view (or a ViewSet action) declares an empty ``permission_classes`` list, which
+  DRF treats as "allow everyone".
+- ``core.E004``: a DRF view does not include ``PublicAccessGuard`` (runtime enforcement).
+- ``core.E005``: a URL name used by a DRF view is registered more than once.
+
+Permissions decided dynamically (``get_permissions()`` overrides, custom classes whose
+``has_permission`` returns True) cannot be proven statically; ``core.E004`` guarantees the
+runtime guard covers them.
 """
 
-from collections.abc import Iterator
+from collections import defaultdict
 from typing import Any
 
 from django.conf import settings
 from django.core.checks import CheckMessage, Error, Tags, register
-from django.urls import URLPattern, URLResolver, get_resolver
+from django.urls import URLPattern, get_resolver
 from rest_framework.permissions import AllowAny
+from rest_framework.views import APIView
 
-from apps.core.api.permissions import PublicEndpoint
-
-
-def _iter_patterns(
-    patterns: list[Any], namespace: str | None = None
-) -> Iterator[tuple[str | None, URLPattern]]:
-    for entry in patterns:
-        if isinstance(entry, URLResolver):
-            child_ns = namespace
-            if entry.namespace:
-                child_ns = f"{namespace}:{entry.namespace}" if namespace else entry.namespace
-            yield from _iter_patterns(entry.url_patterns, child_ns)
-        elif isinstance(entry, URLPattern):
-            name = None
-            if entry.name:
-                name = f"{namespace}:{entry.name}" if namespace else entry.name
-            yield name, entry
+from apps.core.api.permissions import PublicAccessGuard, PublicEndpoint, iter_url_patterns
 
 
-def _permission_classes(callback: Any) -> list[type[Any]] | None:
+def _view_class(callback: Any) -> type[APIView] | None:
     view_class = getattr(callback, "cls", None)
-    if view_class is None:  # not a DRF view
-        return None
-    initkwargs = getattr(callback, "initkwargs", {}) or {}
-    classes = initkwargs.get("permission_classes", getattr(view_class, "permission_classes", ()))
-    return [c for c in classes if isinstance(c, type)]
+    if isinstance(view_class, type) and issubclass(view_class, APIView):
+        return view_class
+    return None
+
+
+def _declared_permission_classes(callback: Any, view_class: type[APIView]) -> list[Any]:
+    initkwargs = getattr(callback, "initkwargs", None) or {}
+    classes = initkwargs.get("permission_classes", view_class.permission_classes)
+    return list(classes)
 
 
 def find_public_endpoint_violations(urlconf: str | None = None) -> list[CheckMessage]:
     allowlist = set(getattr(settings, "API_PUBLIC_ENDPOINTS", ()))
     messages: list[CheckMessage] = []
-    for name, pattern in _iter_patterns(get_resolver(urlconf).url_patterns):
-        classes = _permission_classes(pattern.callback)
-        if not classes:
+    drf_names: dict[str, list[URLPattern]] = defaultdict(list)
+    all_names: dict[str, int] = defaultdict(int)
+
+    for name, pattern in iter_url_patterns(get_resolver(urlconf).url_patterns):
+        if name:
+            all_names[name] += 1
+        view_class = _view_class(pattern.callback)
+        if view_class is None:
             continue
-        public = [c for c in classes if issubclass(c, AllowAny)]
-        if not public:
-            continue
-        label = name or str(pattern.pattern)
-        if any(not issubclass(c, PublicEndpoint) for c in public):
+        if name:
+            drf_names[name].append(pattern)
+        label = name or f"<unnamed route {pattern.pattern}>"
+
+        if not issubclass(view_class, PublicAccessGuard):
             messages.append(
                 Error(
-                    f"Endpoint {label!r} uses AllowAny; use PublicEndpoint and allowlist it.",
+                    f"DRF view {view_class.__name__} ({label}) does not use PublicAccessGuard.",
+                    hint="Inherit from apps.core.api.views.AemsAPIView/AemsGenericAPIView/"
+                    "AemsGenericViewSet or add the PublicAccessGuard mixin first.",
+                    id="core.E004",
+                )
+            )
+
+        classes = _declared_permission_classes(pattern.callback, view_class)
+        if not classes:
+            messages.append(
+                Error(
+                    f"Endpoint {label!r} declares no permission classes (DRF allows everyone).",
+                    hint="Declare explicit permissions; use DenyAll or PublicEndpoint.",
+                    id="core.E003",
+                )
+            )
+            continue
+
+        permissive = [c for c in classes if isinstance(c, type) and issubclass(c, AllowAny)]
+        if any(not issubclass(c, PublicEndpoint) for c in permissive):
+            messages.append(
+                Error(
+                    f"Endpoint {label!r} uses AllowAny (or a subclass other than PublicEndpoint).",
+                    hint="Use PublicEndpoint and add the URL name to API_PUBLIC_ENDPOINTS.",
                     id="core.E002",
                 )
             )
-        if name not in allowlist:
+        if permissive and name not in allowlist:
             messages.append(
                 Error(
                     f"Endpoint {label!r} allows anonymous access but is not listed in "
                     "settings.API_PUBLIC_ENDPOINTS.",
                     hint="Add its URL name to API_PUBLIC_ENDPOINTS or require authentication.",
                     id="core.E001",
+                )
+            )
+
+    for name in sorted(drf_names):
+        if all_names[name] > 1:
+            messages.append(
+                Error(
+                    f"URL name {name!r} is registered {all_names[name]} times.",
+                    hint="URL names used by API views must be unique; the public allowlist "
+                    "and reverse() rely on them.",
+                    id="core.E005",
                 )
             )
     return messages

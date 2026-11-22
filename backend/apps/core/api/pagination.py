@@ -18,13 +18,14 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .exceptions import InvalidQueryParameters
+from .exceptions import DomainError, InvalidQueryParameters
 
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 
 
-class PageNotFound(exceptions.NotFound):
+class PageNotFoundError(DomainError):
+    status_code = 404
     default_detail = "The requested page does not exist."
     default_code = "page_not_found"
 
@@ -71,7 +72,7 @@ class StandardPagination(PageNumberPagination):
         try:
             return super().paginate_queryset(queryset, request, view)  # type: ignore[arg-type]
         except exceptions.NotFound as exc:
-            raise PageNotFound() from exc
+            raise PageNotFoundError() from exc
 
     def get_paginated_response(self, data: Any) -> Response:
         page = self.page

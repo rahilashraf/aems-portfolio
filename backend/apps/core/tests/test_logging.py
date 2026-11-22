@@ -10,11 +10,11 @@ import structlog
 from django.test import Client
 
 from apps.core.logging import (
-    REDACTED,
     build_formatter,
     build_logging_config,
     redact_sensitive_values,
 )
+from apps.core.sanitization import REDACTED
 
 
 class TestRedactionProcessor:

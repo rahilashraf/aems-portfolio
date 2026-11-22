@@ -12,7 +12,7 @@ os.environ.setdefault("DATABASE_URL", "postgres://aems_app:aems_app@localhost:54
 from apps.core.logging import build_logging_config
 
 from .base import *  # noqa: F403
-from .base import INSTALLED_APPS
+from .base import API_PUBLIC_ENDPOINTS, INSTALLED_APPS
 
 DEBUG = False
 ALLOWED_HOSTS = ["testserver", "localhost"]
@@ -25,6 +25,31 @@ EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 # Test-only app providing isolated models/views for exercising shared API infrastructure
 # (pagination, filtering, errors). Never installed outside the test settings.
 INSTALLED_APPS = [*INSTALLED_APPS, "tests.fixtures_app"]
+
+# Public routes of the test-only fixture URLconf (tests/fixtures_app/urls.py). They exist only
+# when a test explicitly selects that URLconf.
+API_PUBLIC_ENDPOINTS = (
+    *API_PUBLIC_ENDPOINTS,
+    "test-widgets",
+    "test-widgets-all",
+    "test-widgets-no-ordering-fields",
+    "test-widgets-no-default-ordering",
+    "test-auth-failed",
+    "test-throttled",
+    "test-echo",
+    "test-conflict",
+    "test-django-404",
+    "test-django-403",
+    "test-django-validation",
+    "test-api-exception",
+    "test-unhandled",
+    "test-context",
+    "test-sensitive-logging",
+    "test-actions-list",
+    "test-unguarded",
+    "test-sensitive-errors",
+    "test-sensitive-validation",
+)
 
 API_DOCS_ENABLED = True
 LOG_FORMAT = "json"

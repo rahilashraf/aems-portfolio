@@ -5,56 +5,60 @@
 - Output is JSON in production (one object per line) and human-readable in development.
 - Every entry carries the request context (``request_id``; later ``user_id``/``organization_id``).
 - Values under sensitive keys (passwords, tokens, cookies, authorization headers, secrets...) are
-  replaced with ``[REDACTED]`` before rendering. Code must still never log raw request headers,
-  query strings or bodies; redaction is a safety net, not a licence.
+  replaced with ``[REDACTED]``; messages and rendered tracebacks are text-sanitized (see
+  :mod:`apps.core.sanitization`). Code must still never log raw request headers, query strings or
+  bodies; redaction is a safety net, not a licence.
 """
 
 import logging
-import re
-from collections.abc import Mapping
 from typing import Any, Literal
 
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
 
+from .sanitization import (
+    REDACTED,
+    is_sensitive_key,
+    redact_structure,
+    sanitize_text,
+)
+
 LogFormat = Literal["json", "console"]
 LOG_FORMATS: tuple[LogFormat, ...] = ("json", "console")
-REDACTED = "[REDACTED]"
-
-SENSITIVE_KEY_PATTERN = re.compile(
-    r"pass(word|wd|phrase)?|secret|token|authorization|auth_header|cookie|session|csrf"
-    r"|api[_-]?key|credential|signature|private[_-]?key",
-    re.IGNORECASE,
-)
-_MAX_REDACTION_DEPTH = 8
-
-
-def _redact(value: Any, depth: int) -> Any:
-    if depth > _MAX_REDACTION_DEPTH:
-        return value
-    if isinstance(value, Mapping):
-        return {
-            key: REDACTED
-            if isinstance(key, str) and SENSITIVE_KEY_PATTERN.search(key)
-            else _redact(item, depth + 1)
-            for key, item in value.items()
-        }
-    if isinstance(value, list | tuple):
-        return type(value)(_redact(item, depth + 1) for item in value)
-    return value
 
 
 def redact_sensitive_values(
     logger: WrappedLogger, method_name: str, event_dict: EventDict
 ) -> EventDict:
-    """structlog processor: replace values stored under sensitive keys (recursively)."""
+    """structlog processor: redact sensitive keys (recursively, bounded) and scrub free text.
+
+    The ``event`` message is text-sanitized (credentials in URLs, ``password=...`` pairs, bearer
+    tokens...); values under sensitive keys become ``[REDACTED]``; nested structures are copied
+    with bounded depth/size and cycle detection (see :mod:`apps.core.sanitization`).
+    ``exc_info`` is left for :func:`sanitize_exception` after the traceback is rendered.
+    """
     for key in list(event_dict):
-        if key == "event":
+        value = event_dict[key]
+        if key == "exc_info":
             continue
-        if SENSITIVE_KEY_PATTERN.search(key):
+        if key == "event":
+            event_dict[key] = sanitize_text(value) if isinstance(value, str) else value
+        elif is_sensitive_key(key):
             event_dict[key] = REDACTED
         else:
-            event_dict[key] = _redact(event_dict[key], depth=1)
+            event_dict[key] = redact_structure(value)
+    return event_dict
+
+
+def sanitize_exception(logger: WrappedLogger, method_name: str, event_dict: EventDict) -> EventDict:
+    """Formatter processor: scrub the rendered traceback (runs after ``format_exc_info``).
+
+    Tracebacks are rendered without local variables; exception messages can still embed
+    credentials (e.g. database errors, URLs), so the text is sanitized before output.
+    """
+    exception = event_dict.get("exception")
+    if isinstance(exception, str):
+        event_dict["exception"] = sanitize_text(exception)
     return event_dict
 
 
@@ -120,6 +124,7 @@ def build_formatter(log_format: LogFormat) -> structlog.stdlib.ProcessorFormatte
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.processors.format_exc_info,
+            sanitize_exception,
             renderer,
         ],
     )

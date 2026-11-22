@@ -29,10 +29,19 @@ data into logs.
 - **Access log.** One `request.completed` event per request with method, the **matched route
   pattern** (never the raw path, and never the query string), status, duration and `REMOTE_ADDR`.
   Health probes are logged at DEBUG.
-- **Sensitive data.**
+- **Sensitive data** (`apps/core/sanitization.py`).
   - A redaction processor replaces values under sensitive keys (password, token, secret,
-    authorization, cookie, session, csrf, api key, credential, signature, private key),
-    recursively.
+    authorization, cookie, session, csrf, api key, credential, signature, private key, dsn),
+    recursively and with bounds (AEMS-008):
+    - beyond depth 8 values become `[TRUNCATED]` and are never returned raw;
+    - containers are capped at 100 entries;
+    - at most 2,000 nodes are visited per value;
+    - circular references become `[CIRCULAR]`.
+  - Free text (log messages and rendered tracebacks) is sanitized. This covers URL credentials,
+    sensitive `key=value` pairs, Bearer/Basic credentials, JWT-shaped tokens, URL query strings,
+    PostgreSQL `Key (...)=(...)` details and quoted literals on SQL `LINE n:` lines. Text is
+    capped at 8 KiB.
+  - Tracebacks are rendered without local variables.
   - A logging filter redacts the raw path that Django's `django.request` logger includes in
     4xx/5xx messages, and the request line written by the development server.
   - SQL logging (`django.db.backends`) is pinned to WARNING.
