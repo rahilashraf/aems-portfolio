@@ -181,6 +181,11 @@ Design: [ADR-0004](docs/adr/0004-authentication-and-session-management.md) and
 There is no self-service registration. Accounts are created by platform administrators (and, from
 Batch 7, through organization invitations). Password-reset emails are delivered through `EMAIL_URL`
 (Mailpit locally: http://localhost:8025/). The reset link carries its token in the URL fragment.
+A `202` means the request was accepted, **not** that an email was delivered: it is sent synchronously
+and not retried, and transport failures are logged (`auth.password_reset.delivery_failed`, without
+the address or token) while the response stays identical, so it cannot reveal whether an account
+exists. Response *time* is not constant, because a known account waits for the mail server
+(see ADR-0013).
 Expired rate-limit records can be removed with `python manage.py purge_auth_rate_limits`.
 
 ## Health endpoints

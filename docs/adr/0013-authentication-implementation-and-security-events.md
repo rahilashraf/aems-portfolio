@@ -74,6 +74,16 @@ did not fix. It also exposed a dependency on audit persistence, which is schedul
   is allowlisted and uses no authentication classes, but still sends a `Bearer` challenge on 401.
 - **Logout is public**, so an expired access token cannot block it. It accepts the refresh cookie
   (with CSRF) or a still-valid bearer token.
+- **Logout binds the token to its session (AEMS-011).** Only a signature-valid, unexpired token
+  identifies a session, and the session is looked up by **both** signed claims, `sid` and `sub`.
+  A client-supplied session id is never acted on alone:
+  - a cookie whose `sid` names another user's session revokes nothing and records
+    `auth.session.owner_mismatch`, since that can only follow a signing-key leak or a defect;
+  - any request carrying the refresh cookie must pass CSRF, even if the cookie is invalid;
+  - invalid, expired or unknown cookies revoke nothing but are still cleared. The response is
+    always 204, so repeated logouts are harmless;
+  - if the cookie identifies no session, a still-valid bearer token is used. It is resolved the same
+    way (`sid` + `sub`, session and user still usable).
 - **Defaults:** `IsAuthenticated` and `SessionJWTAuthentication`. Unauthenticated requests to
   protected endpoints receive `401 not_authenticated` with `WWW-Authenticate: Bearer realm="api"`.
 
@@ -99,6 +109,34 @@ did not fix. It also exposed a dependency on audit persistence, which is schedul
   (`…/reset-password#uid=…&token=…`), which browsers never send to servers or in `Referer` headers.
 - **Token validity:** Django's generator, additionally bound to `password_changed_at` and
   `is_active`. It expires after `PASSWORD_RESET_TIMEOUT` (1 hour) and is single-use.
+
+### Password-reset delivery (AEMS-010)
+- **Same response whatever happens.** Every valid request gets the same `202`, body and headers,
+  whether or not the account exists and whether or not the email could be sent. Any exception while
+  sending is caught; otherwise a failing mail server would give existing accounts a `500` and reveal
+  them.
+- **Failures are reported, not discarded.** They are recorded as
+  `auth.password_reset.delivery_failed` (warning level) with the user id, subject digest, client
+  IP, the exception **class** and `expected` (SMTP/network error versus anything else). The
+  exception message is not logged, because transport errors such as `SMTPRecipientsRefused`
+  contain the address. The token is never logged.
+- **Acceptance does not guarantee delivery.** Mail is sent synchronously within the request and is
+  not retried; the user can ask again within the rate limits. The response text says a link
+  "will be sent" if the account exists.
+- **Rate limits are unchanged** and apply before any lookup, for existing and unknown addresses
+  alike.
+- **Timing is not constant.** Measured locally (median of 150 interleaved requests each):
+  - with an in-memory backend, known accounts are about 0.3 ms slower (token generation and
+    message assembly);
+  - with a simulated 50 ms SMTP round trip, they are about 50 ms slower;
+  - with a mail server that hangs, the delay can reach `EMAIL_TIMEOUT` (10 s).
+
+  Response time can therefore distinguish existing accounts, bounded by the per-IP and
+  per-address rate limits. An earlier `make_password(None)` "dummy work" call was removed: it
+  hashes nothing, so it never balanced the paths. Removing the side channel requires taking
+  delivery out of the request path (a transactional outbox drained by a worker). That is
+  deliberately not part of Batch 3, which adds no task infrastructure, and needs separate
+  approval.
 
 ### Platform admin
 - **Access:** staff only, at a path set by `DJANGO_ADMIN_URL`. The admin login uses the same rate
@@ -140,5 +178,7 @@ event is emitted; nothing claims an audit record is stored.
 
 ## Consequences
 - One indexed session lookup per authenticated request.
+- Password-reset response timing can reveal account existence until delivery leaves the request
+  path (see "Password-reset delivery").
 - The production image does not yet serve the admin's static files; that is a deployment concern.
 - Security events are not yet durable (Batch 5).

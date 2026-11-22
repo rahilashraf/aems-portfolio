@@ -705,3 +705,7 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   `POST /auth/sessions/revoke-others/`), as requested by the Batch 3 authorization.
 - **Password-reset token in the URL fragment** (`#uid=…&token=…`), so it is never sent to servers or
   in Referer headers.
+- **Review corrections AEMS-010 and AEMS-011** (ADR-0013): password-reset delivery failures keep the
+  generic `202` and are reported as sanitized security events; delivery is synchronous and not
+  guaranteed, and response timing is not constant (an outbox/worker is a later, separately approved
+  change). Cookie logout resolves the session by the token's signed `sid` **and** `sub`.
