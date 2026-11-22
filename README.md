@@ -4,7 +4,7 @@ AEMS is a multi-organization SaaS platform for schools, universities, and traini
 supporting online and paper-based examinations with strict tenant isolation and customizable,
 organization-scoped roles and permissions.
 
-> **Status:** Phase 1 — Backend Foundation, Batch 3 (accounts and authentication).
+> **Status:** Phase 1 — Backend Foundation, Batch 4 (organizations and tenancy).
 > See the [Phase 1 plan](docs/phase-1-plan.md) and [Architecture Decision Records](docs/adr/README.md).
 
 ## Technology
@@ -138,6 +138,8 @@ The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the A
 |---|---|---|
 | `GET /api/v1/` | API root (service name and API version) | Public |
 | `/api/v1/auth/...` | Authentication, profile, passwords and sessions (see below) | Mixed |
+| `/api/v1/organizations/...` | The caller's organizations and tenant APIs (see below) | Bearer + membership |
+| `/api/v1/platform/organizations/...` | Organization administration (see below) | Platform administrators |
 | `GET /api/schema/` | OpenAPI 3 schema | Public when `API_DOCS_ENABLED`; always 404 in production |
 | `GET /api/docs/`, `GET /api/redoc/` | Swagger UI / ReDoc | Same as above |
 
@@ -210,6 +212,54 @@ python manage.py deliver_password_reset_emails --status   # queue counts as JSON
   every link is still single-use and expiring.
 
 Expired rate-limit records can be removed with `python manage.py purge_auth_rate_limits`.
+
+## Organizations and tenancy
+
+AEMS uses **shared-schema multi-tenancy**: one database and schema, with every tenant-owned row
+carrying a non-null `organization_id`. Users are global, and one user can be a member of several
+organizations ([ADR-0003](docs/adr/0003-tenant-isolation.md),
+[ADR-0015](docs/adr/0015-organizations-and-tenancy-implementation.md)).
+
+- **The tenant comes from the URL only:** `/api/v1/organizations/{org_id}/…`. Request bodies may
+  not name an organization (400), and headers are ignored.
+- **Every tenant request** resolves the caller's active membership in an active organization. An
+  unknown organization, another tenant's organization, a provisioning or suspended organization,
+  a suspended membership and a platform administrator without a membership all receive the
+  **same 404**.
+- **Authorization is default deny.** Members may use declared read-only actions. Anything else
+  needs an organization permission. Organization roles arrive in Batch 6, so until then
+  permission-gated actions answer 403.
+- **Lifecycle.** New organizations start in `provisioning` and are closed to tenant APIs. They
+  become `active` only when an initial Owner accepts an invitation (Batch 7); there is **no manual
+  activation**. Platform administrators can suspend an active organization, which closes its
+  tenant APIs immediately. Reactivation needs a verified Owner (Batches 6/7).
+- **Row-level security** is deferred to Phase 2, behind a security review (ADR-0003).
+
+| Endpoint | Purpose | Access |
+|---|---|---|
+| `GET /api/v1/organizations/` | My organizations: active memberships in active organizations | Bearer |
+| `GET /api/v1/organizations/{org_id}/` | Organization profile | Active member |
+| `PATCH /api/v1/organizations/{org_id}/` | Update `name`/`timezone` | Requires `organization.update` (403 until Batch 6) |
+| `GET /api/v1/organizations/{org_id}/me/` | My membership in the organization | Active member |
+| `GET`, `POST /api/v1/platform/organizations/` | List (filter `status`, `organization_type`; order `name`, `slug`, `created_at`, `status`) or create (`name`, `slug`, `organization_type`, `timezone`) | Platform administrator |
+| `GET`, `PATCH /api/v1/platform/organizations/{id}/` | Retrieve or update (`name`, `organization_type`, `timezone`, `status`: `active` → `suspended` only) | Platform administrator |
+
+A **platform administrator** is an active staff account holding the matching Django permission
+(`organizations.view_organization`, `add_organization` or `change_organization`; superusers hold
+all). Grant these in the admin. Platform administration gives no access to tenant data.
+
+Deferred routes: members, roles and permissions (Batch 6); invitations (Batch 7); audit logs
+(Batch 5).
+
+**Writing tenant endpoints.** Subclass `OrganizationScopedViewMixin` before the base view. Set
+`tenant_model` and `permission_classes = [HasOrgPermission]`, and declare `member_actions`
+(read-only) and `required_permissions`. Read data only through `get_scoped_queryset()`,
+`get_scoped_object_or_404()` and `TenantScopedPrimaryKeyRelatedField`. The route-coverage
+meta-test (`apps/organizations/tests/test_route_coverage.py`) fails for routes that do not.
+
+**Tests.** `apps/organizations/tests/` contains the tenant-isolation matrix and the route
+meta-test. Active organizations in tests come from a test-only fixture, because production code
+cannot activate one.
 
 ## Health endpoints
 
