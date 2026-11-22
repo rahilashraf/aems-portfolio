@@ -100,7 +100,7 @@ example `DATABASE_URL=postgres://... make migrate` migrates that database.
 | `make check` | Django system checks, including the public-endpoint allowlist |
 | `make security` | bandit static analysis |
 | `make audit` | pip-audit against the locked dependency set |
-| `make secrets` | detect-secrets scan against `.secrets.baseline` |
+| `make secrets` | detect-secrets scan against `.secrets.baseline` (offline: `--no-verify`, so results never depend on network access) |
 | `make check-migrations` | Fails if models and migrations diverge |
 | `make check-no-auth-tables` | Fails if Django's default `auth_user` tables exist |
 | `make schema` | Regenerates `docs/api/openapi.yaml` |
