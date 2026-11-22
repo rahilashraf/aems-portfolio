@@ -62,7 +62,8 @@ docker-migrate: ## Apply migrations inside the backend container
 	$(COMPOSE) exec backend python manage.py migrate
 
 # ------------------------------------------------------------------ django (host)
-.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables shell sendtestemail docker-sendtestemail
+.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables shell sendtestemail docker-sendtestemail \
+	deliver-reset-emails docker-deliver-reset-emails
 run: ## Run the dev server on the host (needs the compose db running)
 	$(MANAGE) runserver
 
@@ -91,6 +92,12 @@ sendtestemail: ## Send a test email via EMAIL_URL (host); view it in Mailpit
 
 docker-sendtestemail: ## Send a test email from the backend container to Mailpit
 	$(COMPOSE) exec backend python manage.py sendtestemail $(TEST_EMAIL)
+
+deliver-reset-emails: ## Send queued password-reset emails (host); view them in Mailpit
+	$(MANAGE) deliver_password_reset_emails
+
+docker-deliver-reset-emails: ## Send queued password-reset emails from the backend container
+	$(COMPOSE) exec backend python manage.py deliver_password_reset_emails
 
 # ------------------------------------------------------------------ quality (host)
 .PHONY: test lint format typecheck audit security secrets deploy-check schema schema-check qa

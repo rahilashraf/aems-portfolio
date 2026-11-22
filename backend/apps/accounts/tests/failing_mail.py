@@ -35,3 +35,17 @@ class TimeoutBackend(BaseEmailBackend):
 class UnexpectedErrorBackend(BaseEmailBackend):
     def send_messages(self, email_messages: Sequence[Any]) -> int:
         raise RuntimeError(f"unexpected failure while sending to {_recipients(email_messages)}")
+
+
+class ForbiddenBackend(BaseEmailBackend):
+    """Fails the test if anything tries to send mail (used to prove the request path never does)."""
+
+    instances = 0
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        type(self).instances += 1
+        super().__init__(*args, **kwargs)
+
+    def send_messages(self, email_messages: Sequence[Any]) -> int:
+        msg = "The request path must not send email."
+        raise AssertionError(msg)

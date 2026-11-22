@@ -235,6 +235,22 @@ FRONTEND_BASE_URL: str = env.str("AEMS_FRONTEND_BASE_URL", default="http://local
 PASSWORD_RESET_URL_TEMPLATE: str = (
     FRONTEND_BASE_URL.rstrip("/") + "/reset-password#uid={uid}&token={token}"
 )
+# Password-reset email outbox (ADR-0014). Requests only enqueue; the
+# `deliver_password_reset_emails` command sends, and must be run regularly (e.g. every minute).
+PASSWORD_RESET_OUTBOX: dict[str, int] = {
+    # A request not delivered within this time is discarded (the user can ask again).
+    "ttl_seconds": env.int("AEMS_PASSWORD_RESET_EMAIL_TTL_SECONDS", default=900),
+    "max_attempts": env.int("AEMS_PASSWORD_RESET_EMAIL_MAX_ATTEMPTS", default=5),
+    # Retry delay: base * 2^(attempt - 1), capped.
+    "backoff_base_seconds": 60,
+    "backoff_cap_seconds": 900,
+    # A claim expires after this, so work held by a crashed command is retried. Must exceed
+    # EMAIL_TIMEOUT, because one claim covers one SMTP exchange.
+    "lease_seconds": 120,
+    # Finished rows (delivered, failed, expired, cancelled) are deleted after this.
+    "retention_seconds": 7 * 24 * 3600,
+    "max_batch_size": 1000,
+}
 
 # JWT (SimpleJWT primitives) signed with a dedicated key, never SECRET_KEY.
 JWT_SIGNING_KEY: str = env.str("DJANGO_JWT_SIGNING_KEY")

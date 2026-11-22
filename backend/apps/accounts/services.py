@@ -4,18 +4,15 @@ Views stay thin; every rule (rate limits, backoff, enumeration resistance, sessi
 transactions, security events) lives here.
 """
 
-import smtplib
 from dataclasses import dataclass
 from typing import Any
 
-from django.conf import settings
 from django.contrib.auth import authenticate, password_validation
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mail
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
-from django.utils.encoding import force_bytes, force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 from rest_framework import exceptions
 
 from apps.core.api.exceptions import DomainError
@@ -24,6 +21,7 @@ from apps.core.security_events import record_after_commit, record_security_event
 from . import ratelimit
 from .models import AuthSession, RevokeReason, User
 from .normalization import normalize_email
+from .outbox import enqueue_password_reset
 from .sessions import IssuedTokens, create_session, revoke_user_sessions
 from .tokens import password_reset_tokens
 
@@ -173,33 +171,24 @@ def _validate_new_password(password: str, user: User | None) -> None:
 
 
 # --------------------------------------------------------------------------- password reset
-# Failures of the mail transport we expect in operation: SMTP protocol/auth/recipient errors and
-# network errors (refused, reset, DNS, timeouts — ``TimeoutError`` and ``socket.gaierror`` are
-# ``OSError`` subclasses).
-EXPECTED_MAIL_ERRORS: tuple[type[BaseException], ...] = (smtplib.SMTPException, OSError)
-
-
 def request_password_reset(*, email: str, client_ip: str | None) -> None:
-    """Send a reset link if an active account exists. The caller always answers 202.
+    """Queue a reset email if an eligible account exists. The caller always answers 202.
 
-    Enumeration resistance:
+    Enumeration resistance (ADR-0014):
 
-    - Rate limits apply per IP and per submitted address whether or not the account exists, so 429
-      responses reveal nothing about existence.
-    - **Delivery failures never change the response.** Any exception raised while sending is
-      caught, so a known account whose email cannot be sent gets the same 202, body and headers as
-      an unknown one. The failure is reported as ``auth.password_reset.delivery_failed`` with
-      identifiers only: the user id, the subject digest and the exception *class*. The exception
-      message is deliberately not logged, because transport errors such as
-      ``SMTPRecipientsRefused`` embed the recipient address. The reset token is never logged.
-    - Acceptance does not guarantee delivery. The request is not retried; the user can request a
-      new link (within the rate limits).
+    - **No SMTP in the request.** The request only enqueues; ``deliver_password_reset_emails``
+      sends later. Mail-server latency and failures therefore cannot show in the response.
+    - **Same work whatever the address.** After the rate limits (also applied to every address),
+      one SQL statement both looks up the account and conditionally inserts the outbox row. Known
+      and unknown addresses run the same statement; only the server-side event differs.
+    - **No row for unknown addresses**, and at most one pending row per user, so requests cannot
+      grow the outbox without bound or queue mail to arbitrary addresses.
+    - **Enqueue failures do not change the response.** A database error from the enqueue
+      statement is recorded as ``auth.password_reset.enqueue_failed`` (no address) and the
+      request still answers 202.
 
-    Timing: this is **not** constant time. For a known account the request also generates a reset
-    token and waits for the mail transport (an SMTP round trip, bounded by ``EMAIL_TIMEOUT``),
-    which an unknown account does not, so response time can distinguish the two. Closing that
-    side channel requires moving delivery out of the request (an outbox/worker), which is out of
-    scope for Batch 3; the per-IP and per-address rate limits bound how fast it can be probed.
+    Not constant time: the lookup, a conditional insert and the database itself can still differ
+    by small amounts. A 202 means "accepted", not "delivered".
     """
     normalized = normalize_email(email)
     account_digest = ratelimit.digest("email", normalized)
@@ -214,59 +203,25 @@ def request_password_reset(*, email: str, client_ip: str | None) -> None:
         client_ip=client_ip,
         subject_digest=account_digest,
     )
-    user = User.objects.filter(email=normalized, is_active=True).first()
-    if user is None or not user.has_usable_password():
-        record_security_event(
-            "auth.password_reset.requested",
-            outcome="success",
-            client_ip=client_ip,
-            subject_digest=account_digest,
-            account_found=False,
-        )
-        return
-
-    record_security_event(
-        "auth.password_reset.requested",
-        outcome="success",
-        user_id=user.pk,
-        client_ip=client_ip,
-        subject_digest=account_digest,
-        account_found=True,
-    )
     try:
-        _send_password_reset_email(user)
-    except Exception as exc:
-        # Deliberately broad: *any* failure here would otherwise turn into a 500 for existing
-        # accounts only and reveal that the account exists. Unexpected errors are flagged so they
-        # stand out from routine transport failures.
+        with transaction.atomic():
+            user_id = enqueue_password_reset(normalized)
+    except DatabaseError as exc:
         record_security_event(
-            "auth.password_reset.delivery_failed",
+            "auth.password_reset.enqueue_failed",
             outcome="failure",
-            user_id=user.pk,
             client_ip=client_ip,
             subject_digest=account_digest,
             error_type=type(exc).__name__,
-            expected=isinstance(exc, EXPECTED_MAIL_ERRORS),
         )
-
-
-def _send_password_reset_email(user: User) -> None:
-    uid = urlsafe_base64_encode(force_bytes(user.pk))
-    token = password_reset_tokens.make_token(user)
-    # The token travels in the URL fragment, which browsers never send to servers or in Referer.
-    link = settings.PASSWORD_RESET_URL_TEMPLATE.format(uid=uid, token=token)
-    send_mail(
-        subject="Reset your AEMS password",
-        message=(
-            f"Hello {user.full_name},\n\n"
-            "A password reset was requested for your AEMS account. Use the link below to choose a "
-            "new password. The link expires and can only be used once.\n\n"
-            f"{link}\n\n"
-            "If you did not request this, you can ignore this email; your password is unchanged.\n"
-        ),
-        from_email=None,
-        recipient_list=[user.email],
-        fail_silently=False,
+        return
+    record_security_event(
+        "auth.password_reset.requested",
+        outcome="success",
+        user_id=user_id,
+        client_ip=client_ip,
+        subject_digest=account_digest,
+        queued=user_id is not None,
     )
 
 

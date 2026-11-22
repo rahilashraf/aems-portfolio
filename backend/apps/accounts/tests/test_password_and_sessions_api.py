@@ -10,6 +10,7 @@ from django.test import Client, override_settings
 from django.utils import timezone
 
 from apps.accounts.models import AuthSession, RevokeReason, User
+from apps.accounts.outbox import deliver_due
 from apps.accounts.tokens import decode_access_token, password_reset_tokens
 
 from .conftest import ME_URL, PASSWORD, REFRESH_COOKIE, SESSIONS_URL, do_login, event_names
@@ -108,6 +109,7 @@ class TestPasswordReset:
         )
 
     def _link_parts(self) -> tuple[str, str]:
+        deliver_due(batch_size=10)  # requests only enqueue (ADR-0014)
         [message] = mail.outbox
         match = re.search(r"/reset-password#uid=([^&\s]+)&token=([^\s]+)", str(message.body))
         assert match, message.body
@@ -120,6 +122,8 @@ class TestPasswordReset:
         for response in (known, unknown):
             assert response.status_code == 202
         assert known.json() == unknown.json()
+        assert mail.outbox == []  # nothing is sent during the request
+        deliver_due(batch_size=10)
         assert len(mail.outbox) == 1
         message = mail.outbox[0]
         assert message.to == ["alice@example.org"]
@@ -131,6 +135,7 @@ class TestPasswordReset:
         make_user("nopass@example.org", password=None)
         assert self._request("inactive@example.org").status_code == 202
         assert self._request("nopass@example.org").status_code == 202
+        deliver_due(batch_size=10)
         assert mail.outbox == []
 
     def test_confirm_sets_password_and_revokes_sessions(
@@ -209,105 +214,6 @@ class TestPasswordReset:
         assert self._request("ghost@example.org").status_code == 429
         self._confirm("x", "y")
         assert self._confirm("x", "y").status_code == 429
-
-
-FAILING_BACKENDS = {
-    "recipients_refused": ("RecipientsRefusedBackend", "SMTPRecipientsRefused", True),
-    "connection_refused": ("ConnectionRefusedBackend", "ConnectionRefusedError", True),
-    "timeout": ("TimeoutBackend", "TimeoutError", True),
-    "unexpected": ("UnexpectedErrorBackend", "RuntimeError", False),
-}
-# Headers that legitimately differ between any two requests.
-PER_REQUEST_HEADERS = {"x-request-id"}
-
-
-def _comparable_headers(response: Any) -> dict[str, str]:
-    return {k.lower(): v for k, v in response.items() if k.lower() not in PER_REQUEST_HEADERS}
-
-
-class TestPasswordResetDeliveryFailure:
-    """AEMS-010: mail transport failures must not reveal whether an account exists."""
-
-    def _request(self, email: str) -> Any:
-        return Client().post(RESET_URL, {"email": email}, content_type="application/json")
-
-    @pytest.mark.parametrize("case", sorted(FAILING_BACKENDS))
-    def test_failure_for_existing_account_is_indistinguishable_from_unknown(
-        self, case: str, user: User, events: Any, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        backend, error_type, expected = FAILING_BACKENDS[case]
-        with override_settings(EMAIL_BACKEND=f"apps.accounts.tests.failing_mail.{backend}"):
-            known = self._request(user.email)
-            unknown = self._request("nobody@example.org")
-
-        assert known.status_code == unknown.status_code == 202
-        assert known.content == unknown.content
-        assert _comparable_headers(known) == _comparable_headers(unknown)
-        assert mail.outbox == []
-
-        [failure] = [e for e in events if e.name == "auth.password_reset.delivery_failed"]
-        assert failure.outcome == "failure"
-        assert failure.user_id == str(user.pk)
-        assert failure.subject_digest is not None
-        assert failure.metadata == {"error_type": error_type, "expected": expected}
-        # Diagnostics never carry the address or anything from the exception message.
-        rendered = repr(failure) + caplog.text
-        assert user.email not in rendered
-        assert "mailbox unavailable" not in rendered
-        assert "unexpected failure" not in rendered
-        assert "auth.password_reset.delivery_failed" in caplog.text
-
-    def test_reset_token_is_not_logged_on_failure(
-        self, user: User, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(password_reset_tokens, "make_token", lambda _user: "SENTINEL-TOKEN")
-        with override_settings(
-            EMAIL_BACKEND="apps.accounts.tests.failing_mail.RecipientsRefusedBackend"
-        ):
-            assert self._request(user.email).status_code == 202
-        assert "SENTINEL-TOKEN" not in caplog.text
-        assert "delivery_failed" in caplog.text
-
-    def test_unknown_account_records_no_delivery_failure(self, db: Any, events: Any) -> None:
-        with override_settings(
-            EMAIL_BACKEND="apps.accounts.tests.failing_mail.ConnectionRefusedBackend"
-        ):
-            assert self._request("nobody@example.org").status_code == 202
-        assert event_names(events) == ["auth.password_reset.requested"]
-
-    def test_real_smtp_backend_connection_failure_is_handled(self, user: User, events: Any) -> None:
-        # Nothing listens on port 9 (discard) on loopback in the test environments: a genuine
-        # network failure from Django's SMTP backend rather than a stub.
-        with override_settings(
-            EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
-            EMAIL_HOST="127.0.0.1",
-            EMAIL_PORT=9,
-            EMAIL_TIMEOUT=2,
-        ):
-            known = self._request(user.email)
-            unknown = self._request("nobody@example.org")
-        assert known.status_code == unknown.status_code == 202
-        assert known.content == unknown.content
-        [failure] = [e for e in events if e.name == "auth.password_reset.delivery_failed"]
-        assert failure.metadata["expected"] is True
-
-    @override_settings(
-        EMAIL_BACKEND="apps.accounts.tests.failing_mail.RecipientsRefusedBackend",
-        AUTH_RATE_LIMITS={
-            "password_reset_ip": (100, 3600),
-            "password_reset_account": (1, 3600),
-        },
-    )
-    def test_rate_limits_still_apply_when_delivery_fails(self, user: User) -> None:
-        assert self._request(user.email).status_code == 202
-        assert self._request(user.email).status_code == 429
-        assert self._request("ghost@example.org").status_code == 202
-        assert self._request("ghost@example.org").status_code == 429
-
-    def test_successful_delivery_still_sends_one_email(self, user: User, events: Any) -> None:
-        assert self._request(user.email).status_code == 202
-        assert len(mail.outbox) == 1
-        assert "auth.password_reset.delivery_failed" not in event_names(events)
 
 
 class TestSessionsApi:

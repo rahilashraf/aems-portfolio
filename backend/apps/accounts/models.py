@@ -178,3 +178,63 @@ class AuthBackoff(models.Model):
 
     def __str__(self) -> str:
         return f"backoff:{self.key_digest[:8]} failures={self.failures}"
+
+
+class PasswordResetDeliveryStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    DELIVERED = "delivered", "Delivered"
+    FAILED = "failed", "Failed"
+    EXPIRED = "expired", "Expired"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+OUTBOX_ONE_PENDING_CONSTRAINT = "accounts_pwreset_outbox_one_pending"
+
+
+class PasswordResetOutbox(models.Model):
+    """Pending password-reset email for one user (ADR-0014). Not a general message queue.
+
+    **Holds no secrets and no message content.** There is no recipient address, reset token, link
+    or body column. The delivery command reads the user's *current* address and generates the
+    reset token at send time, so a database read of this table reveals only that a user asked for
+    a reset, and when. Rows are deleted after a bounded retention period.
+
+    At most one ``pending`` row exists per user (partial unique constraint): repeated requests
+    refresh it instead of adding rows. Requests for unknown or ineligible addresses create nothing.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="+")
+    requested_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    status = models.CharField(
+        max_length=16,
+        choices=PasswordResetDeliveryStatus.choices,
+        default=PasswordResetDeliveryStatus.PENDING,
+    )
+    attempts = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField()
+    # Lease held by the delivery command while it sends; expires so crashed work is retried.
+    claim_id = models.UUIDField(null=True, blank=True)
+    claimed_until = models.DateTimeField(null=True, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    # Sanitized failure category (e.g. "timeout"), never an exception message.
+    last_failure = models.CharField(max_length=32, blank=True, default="")
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints: ClassVar[list[Any]] = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(status="pending"),
+                name=OUTBOX_ONE_PENDING_CONSTRAINT,
+            ),
+        ]
+        indexes: ClassVar[list[Any]] = [
+            models.Index(fields=["status", "next_attempt_at"], name="accounts_pwreset_outbox_due"),
+            models.Index(fields=["completed_at"], name="accounts_pwreset_outbox_done"),
+        ]
+
+    def __str__(self) -> str:
+        return f"PasswordResetOutbox {self.id} ({self.status})"
