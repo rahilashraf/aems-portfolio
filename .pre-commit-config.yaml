@@ -27,7 +27,7 @@ repos:
     rev: 01886c8a910c64595c47f186ca1ffc0b77fa5458  # v1.5.0
     hooks:
       - id: detect-secrets
-        args: ["--baseline", ".secrets.baseline"]
+        args: ["--baseline", ".secrets.baseline", "--no-verify"]
         exclude: (uv\.lock|\.secrets\.baseline)$
 
   - repo: local

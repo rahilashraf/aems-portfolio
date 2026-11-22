@@ -7,13 +7,32 @@ and checked (``manage.py check --deploy``) in CI.
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, DEBUG, SECRET_KEY, env
-from .validation import validate_cors_origins, validate_production_settings
+from .base import (
+    ALLOWED_HOSTS,
+    AUTH_PASSWORD_MIN_LENGTH,
+    AUTH_REFRESH_COOKIE,
+    CORS_ALLOWED_ORIGINS,
+    DEBUG,
+    JWT_SIGNING_KEY,
+    SECRET_KEY,
+    env,
+)
+from .validation import (
+    validate_auth_settings,
+    validate_cors_origins,
+    validate_jwt_signing_key,
+    validate_production_settings,
+)
 
 # DEBUG comes from the environment (via base) and is validated, not silently overridden:
 # DJANGO_DEBUG=true must stop production startup rather than be ignored.
 validate_production_settings(secret_key=SECRET_KEY, debug=DEBUG, allowed_hosts=ALLOWED_HOSTS)
 validate_cors_origins(CORS_ALLOWED_ORIGINS, require_https=True)
+validate_jwt_signing_key(JWT_SIGNING_KEY, secret_key=SECRET_KEY)
+validate_auth_settings(
+    refresh_cookie_secure=bool(AUTH_REFRESH_COOKIE["SECURE"]),
+    password_min_length=AUTH_PASSWORD_MIN_LENGTH,
+)
 
 # API documentation stays disabled in production until staff authentication and authorization
 # exist. Asking for it is a configuration error rather than something to silently ignore.

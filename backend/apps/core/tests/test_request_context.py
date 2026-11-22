@@ -173,7 +173,7 @@ class TestAccessLog:
         Client().get(
             "/test-api/context/?sleep=0&token=tok_secret_value&password=hunter2",
             HTTP_X_REQUEST_ID="access-log-0001",
-            HTTP_AUTHORIZATION="Bearer tok_header_secret",
+            HTTP_AUTHORIZATION="Basic tok_header_secret",
             HTTP_COOKIE="sessionid=cookie_secret_value",
             HTTP_X_FORWARDED_FOR="203.0.113.99",
         )

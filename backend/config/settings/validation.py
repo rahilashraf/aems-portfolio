@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 SUPPORTED_DATABASE_ENGINE = "django.db.backends.postgresql"
 MIN_SECRET_KEY_LENGTH = 50
+MIN_PRODUCTION_PASSWORD_LENGTH = 12
 MIN_SECRET_KEY_UNIQUE_CHARS = 5
 _INSECURE_MARKERS = ("insecure", "change-me", "changeme", "dev-only", "test-only", "example")
 
@@ -78,4 +79,25 @@ def validate_database_engine(engine: str) -> None:
             f"Unsupported database engine {engine!r}: DATABASE_URL must point to PostgreSQL "
             f"({SUPPORTED_DATABASE_ENGINE})."
         )
+        raise ImproperlyConfigured(msg)
+
+
+def validate_jwt_signing_key(jwt_key: str, *, secret_key: str) -> None:
+    """The JWT key must be a strong, dedicated secret (never the Django SECRET_KEY)."""
+    try:
+        validate_secret_key(jwt_key)
+    except ImproperlyConfigured as exc:
+        msg = str(exc).replace("DJANGO_SECRET_KEY", "DJANGO_JWT_SIGNING_KEY")
+        raise ImproperlyConfigured(msg) from exc
+    if jwt_key == secret_key:
+        msg = "DJANGO_JWT_SIGNING_KEY must differ from DJANGO_SECRET_KEY."
+        raise ImproperlyConfigured(msg)
+
+
+def validate_auth_settings(*, refresh_cookie_secure: bool, password_min_length: int) -> None:
+    if not refresh_cookie_secure:
+        msg = "The refresh-token cookie must be Secure in production."
+        raise ImproperlyConfigured(msg)
+    if password_min_length < MIN_PRODUCTION_PASSWORD_LENGTH:
+        msg = f"DJANGO_PASSWORD_MIN_LENGTH must be at least {MIN_PRODUCTION_PASSWORD_LENGTH}."
         raise ImproperlyConfigured(msg)

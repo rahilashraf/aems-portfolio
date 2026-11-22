@@ -40,6 +40,7 @@ def _run(
         **{k: v for k, v in os.environ.items() if k.startswith("COVERAGE_")},
         "DJANGO_SETTINGS_MODULE": "config.settings.production",
         "DJANGO_SECRET_KEY": STRONG_KEY,
+        "DJANGO_JWT_SIGNING_KEY": "p8V#q2Lm!x7Rz4@kT9w$Hn3^bY6&cJ1*dF5(gS0)aE8-uI2+oP7=lK4_mN9~vB3",
         "DJANGO_ALLOWED_HOSTS": "api.example.org",
         "DATABASE_URL": "postgres://u:p@localhost:5432/db",
         **(overrides or {}),
@@ -212,3 +213,49 @@ def test_production_log_format_defaults_to_json() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "json"
+
+
+class TestAuthenticationSettingsInProduction:
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"DJANGO_JWT_SIGNING_KEY": "too-short"}, "DJANGO_JWT_SIGNING_KEY must be at least 50"),
+            ({"DJANGO_JWT_SIGNING_KEY": "change-me-" + STRONG_KEY}, "placeholder"),
+            ({"DJANGO_JWT_SIGNING_KEY": STRONG_KEY}, "must differ from DJANGO_SECRET_KEY"),
+            ({"DJANGO_AUTH_REFRESH_COOKIE_SECURE": "false"}, "must be Secure in production"),
+            ({"DJANGO_PASSWORD_MIN_LENGTH": "8"}, "DJANGO_PASSWORD_MIN_LENGTH must be at least 12"),
+        ],
+    )
+    def test_unsafe_auth_configuration_is_refused(
+        self, overrides: dict[str, str], message: str
+    ) -> None:
+        result = _run(overrides=overrides)
+
+        assert result.returncode != 0
+        assert "ImproperlyConfigured" in result.stderr
+        assert message in result.stderr
+
+    def test_missing_jwt_key_is_refused(self) -> None:
+        result = _run(unset=("DJANGO_JWT_SIGNING_KEY",))
+
+        assert result.returncode != 0
+        assert "DJANGO_JWT_SIGNING_KEY" in result.stderr
+
+    def test_secure_defaults(self) -> None:
+        script = (
+            "import django\nfrom django.conf import settings\ndjango.setup()\n"
+            "c = settings.AUTH_REFRESH_COOKIE\n"
+            "print(c['SECURE'], c['SAMESITE'], c['PATH'], settings.SESSION_COOKIE_SECURE,"
+            " settings.CSRF_COOKIE_SECURE, settings.PASSWORD_HASHERS[0].rsplit('.', 1)[-1])\n"
+        )
+        result = _run(script)
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split() == [
+            "True",
+            "Strict",
+            "/api/v1/auth/",
+            "True",
+            "True",
+            "Argon2PasswordHasher",
+        ]

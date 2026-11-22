@@ -70,14 +70,19 @@ class TestConcreteBehaviour:
 
 @pytest.mark.django_db
 class TestMigrationState:
-    def test_no_default_django_auth_or_admin_tables(self) -> None:
+    def test_no_default_auth_user_tables(self) -> None:
         tables = set(connection.introspection.table_names())
-        forbidden_prefixes = ("auth_", "django_admin", "django_session", "django_content_type")
-        assert not [t for t in tables if t.startswith(forbidden_prefixes)]
+        assert not tables & {"auth_user", "auth_user_groups", "auth_user_user_permissions"}
+        assert {"accounts_user", "auth_group", "auth_permission"} <= tables
 
-    def test_auth_and_admin_apps_are_not_installed(self) -> None:
+    def test_custom_user_model_is_active(self) -> None:
+        from django.conf import settings  # noqa: PLC0415
+        from django.contrib.auth import get_user_model  # noqa: PLC0415
+
+        assert settings.AUTH_USER_MODEL == "accounts.User"
+        assert get_user_model()._meta.db_table == "accounts_user"
         for label in ("auth", "admin", "sessions", "contenttypes"):
-            assert not apps.is_installed(f"django.contrib.{label}")
+            assert apps.is_installed(f"django.contrib.{label}")
 
     def test_core_has_no_concrete_models(self) -> None:
         assert list(apps.get_app_config("core").get_models()) == []

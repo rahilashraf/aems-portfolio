@@ -12,6 +12,7 @@ from typing import Any
 from apps.core.problems import PROBLEM_CONTENT_TYPE
 
 PROBLEM_SCHEMA_NAME = "ProblemDetails"
+PROBLEM_401_EXTENSION = "x-aems-problem-401"
 PROBLEM_ERROR_SCHEMA_NAME = "ProblemFieldError"
 _PROBLEM_REF = {"$ref": f"#/components/schemas/{PROBLEM_SCHEMA_NAME}"}
 _HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -73,6 +74,13 @@ def _error_statuses(path: str, operation: dict[str, Any]) -> list[int]:
     has_body = "requestBody" in operation
     has_query = any(p.get("in") == "query" for p in operation.get("parameters", []))
     statuses = [403, 406, 429, 500]
+    security = operation.get("security") or []
+    # Authentication required (a scheme and no anonymous {} alternative), or a public operation that
+    # can itself answer 401 (marked with the x-aems-problem-401 extension, e.g. login).
+    if (security and all(requirement for requirement in security)) or operation.pop(
+        PROBLEM_401_EXTENSION, False
+    ):
+        statuses.append(401)
     if has_body or has_query:
         statuses.append(400)
     if "{" in path:

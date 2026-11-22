@@ -8,9 +8,12 @@ SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
-# Load local development variables (if present) for host-side commands.
--include .env
-export $(shell sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env 2>/dev/null)
+# Load local development variables (if present) for host-side commands. Each .env value is only a
+# default (?=): variables already set in the environment or on the command line take precedence,
+# e.g. `DATABASE_URL=... make migrate` really targets that database.
+ENV_FILE_VARS := $(shell sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env 2>/dev/null)
+$(foreach var,$(ENV_FILE_VARS),$(eval $(var) ?= $(shell sed -n 's/^$(var)=//p' .env)))
+export $(ENV_FILE_VARS)
 
 BACKEND := backend
 UV := uv --directory $(BACKEND)
@@ -59,7 +62,8 @@ docker-migrate: ## Apply migrations inside the backend container
 	$(COMPOSE) exec backend python manage.py migrate
 
 # ------------------------------------------------------------------ django (host)
-.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables shell sendtestemail docker-sendtestemail
+.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables shell sendtestemail docker-sendtestemail \
+	deliver-reset-emails docker-deliver-reset-emails
 run: ## Run the dev server on the host (needs the compose db running)
 	$(MANAGE) runserver
 
@@ -88,6 +92,12 @@ sendtestemail: ## Send a test email via EMAIL_URL (host); view it in Mailpit
 
 docker-sendtestemail: ## Send a test email from the backend container to Mailpit
 	$(COMPOSE) exec backend python manage.py sendtestemail $(TEST_EMAIL)
+
+deliver-reset-emails: ## Send queued password-reset emails (host); view them in Mailpit
+	$(MANAGE) deliver_password_reset_emails
+
+docker-deliver-reset-emails: ## Send queued password-reset emails from the backend container
+	$(COMPOSE) exec backend python manage.py deliver_password_reset_emails
 
 # ------------------------------------------------------------------ quality (host)
 .PHONY: test lint format typecheck audit security secrets deploy-check schema schema-check qa
@@ -118,7 +128,9 @@ security: ## Static security analysis
 	$(UV) run bandit -c pyproject.toml -r apps config scripts
 
 secrets: ## Scan tracked files for committed secrets (detect-secrets baseline)
-	uv run --project $(BACKEND) pre-commit run detect-secrets --all-files
+	uv run --project $(BACKEND) pre-commit run detect-secrets --all-files \
+		|| { echo "--- .secrets.baseline changes made by the hook:"; \
+		     git --no-pager diff -- .secrets.baseline; exit 1; }
 
 # OpenAPI contract. Generated with the test settings so the output never depends on a local .env.
 SCHEMA_FILE := docs/api/openapi.yaml
@@ -140,6 +152,7 @@ deploy-check: ## Django deployment checklist against production settings
 	DJANGO_SETTINGS_MODULE=config.settings.production DJANGO_DEBUG=false \
 	DJANGO_API_DOCS_ENABLED=false DJANGO_CORS_ALLOWED_ORIGINS= DJANGO_LOG_FORMAT=json \
 	DJANGO_SECRET_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+	DJANGO_JWT_SIGNING_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_ALLOWED_HOSTS=api.example.org \
 	DATABASE_URL=postgres://u:p@localhost:5432/db \
 	$(UV) run python manage.py check --deploy --fail-level WARNING

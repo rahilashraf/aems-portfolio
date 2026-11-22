@@ -13,6 +13,7 @@ def _run_local(database_url: str) -> subprocess.CompletedProcess[str]:
         **{k: v for k, v in os.environ.items() if k.startswith("COVERAGE_")},
         "DJANGO_SETTINGS_MODULE": "config.settings.local",
         "DJANGO_SECRET_KEY": "local-development-key",
+        "DJANGO_JWT_SIGNING_KEY": "local-development-jwt-key",
         "DATABASE_URL": database_url,
     }
     script = (
