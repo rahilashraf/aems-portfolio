@@ -60,7 +60,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # No gunicorn access log: it would print raw request lines including query strings. Requests are
 # logged by apps.core.middleware.RequestContextMiddleware (structured JSON, route pattern only).
+# The gunicorn control socket (runtime admin interface) is not used and is disabled.
 CMD ["gunicorn", "config.wsgi:application", \
      "--bind", "0.0.0.0:8000", \
      "--workers", "3", \
+     "--no-control-socket", \
      "--forwarded-allow-ips", "127.0.0.1"]

@@ -320,10 +320,10 @@ jobs:
           # Everything else is redirected to HTTPS unless it arrived via the TLS proxy.
           expect 301 /api/v1/
           expect 200 /api/v1/ "${tls[@]}"
-          grep -q '"api_version":"v1"' /tmp/body
+          grep -Eq '"api_version": ?"v1"' /tmp/body
           # API documentation is disabled in production.
           expect 404 /api/docs/ "${tls[@]}"
-          grep -q '"code":"not_found"' /tmp/body
+          grep -Eq '"code": ?"not_found"' /tmp/body
           expect 404 /api/schema/ "${tls[@]}"
           curl -sS -D - -o /dev/null -H "Host: $API_HOST" "${tls[@]}" "$base/api/v1/" \
             | grep -qi '^x-request-id:'
