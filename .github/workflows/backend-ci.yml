@@ -284,6 +284,16 @@ jobs:
           done
           docker logs aems-db; exit 1
 
+      - name: Start Mailpit for password-reset delivery
+        run: |
+          docker run -d --name aems-mail --network aems-ci -p 127.0.0.1:8025:8025 \
+            axllent/mailpit:v1.27
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:8025/api/v1/messages && exit 0
+            sleep 1
+          done
+          docker logs aems-mail; exit 1
+
       - name: Start the production container
         run: |
           docker run -d --name aems-api --network aems-ci -p 127.0.0.1:8000:8000 \
@@ -292,6 +302,7 @@ jobs:
             -e DJANGO_ALLOWED_HOSTS="$API_HOST" \
             -e DJANGO_BEHIND_TLS_PROXY=true \
             -e DATABASE_URL=postgres://aems_app:ci-only-app-password@aems-db:5432/aems \
+            -e EMAIL_URL=smtp://aems-mail:1025 \
             "$IMAGE"
 
       - name: Wait for the image HEALTHCHECK to report healthy
@@ -352,6 +363,71 @@ jobs:
             -H "X-Forwarded-Proto: https" "$base/api/v1/auth/me/")"
           echo "GET /api/v1/auth/me/ (no token) -> $got (expected 401)"
           test "$got" = 401
+
+      - name: Password reset is queued in the request and delivered to Mailpit by the command
+        run: |
+          base=http://127.0.0.1:8000
+          mailpit=http://127.0.0.1:8025
+          account=reset-e2e@example.org
+          docker exec \
+            -e DJANGO_SUPERUSER_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+            -e DJANGO_SUPERUSER_FULL_NAME="Reset E2E" \
+            aems-api python manage.py createsuperuser --noinput --email "$account" > /dev/null
+          reset() {  # reset <email> <name>: status code; headers and body saved under /tmp/<name>.*
+            curl -sS -D "/tmp/$2.headers" -o "/tmp/$2.body" -w '%{http_code}' \
+              -H "Host: $API_HOST" -H "X-Forwarded-Proto: https" -H "Content-Type: application/json" \
+              -d "{\"email\": \"$1\"}" "$base/api/v1/auth/password/reset/"
+          }
+          headers() { grep -viE '^(date|x-request-id):' "/tmp/$1.headers" | tr -d '\r' | sort; }
+          messages() { curl -fsS "$mailpit/api/v1/messages" | python3 -c 'import json, sys; print(json.load(sys.stdin)["total"])'; }
+
+          known="$(reset "$account" known)"; unknown="$(reset nobody-e2e@example.org unknown)"
+          echo "reset (existing account) -> $known, reset (unknown account) -> $unknown (expected 202)"
+          test "$known" = 202 && test "$unknown" = 202
+          cmp /tmp/known.body /tmp/unknown.body
+          diff <(headers known) <(headers unknown)
+          echo "Bodies and headers are identical"
+          test "$(messages)" = 0 || { echo "Email was sent during the request"; exit 1; }
+          echo "No email was sent during the request"
+
+          docker exec aems-api python manage.py deliver_password_reset_emails --status
+          out="$(docker exec aems-api python manage.py deliver_password_reset_emails)"
+          echo "$out"
+          grep -q 'delivered=1' <<<"$out"
+          test "$(messages)" = 1
+
+          # Complete the reset with the emailed link. The token is never printed.
+          python3 - "$mailpit" "$base" "$API_HOST" "$account" <<'PY'
+          import json, re, sys, urllib.error, urllib.request
+
+          mailpit, base, host, account = sys.argv[1:]
+          [summary] = json.load(urllib.request.urlopen(f"{mailpit}/api/v1/messages"))["messages"]
+          assert [to["Address"] for to in summary["To"]] == [account], "unexpected recipient"
+          text = json.load(urllib.request.urlopen(f"{mailpit}/api/v1/message/{summary['ID']}"))["Text"]
+          link = re.search(r"/reset-password#uid=([^&\s]+)&token=(\S+)", text)
+          assert link, "no reset link (token in the URL fragment) in the email"
+
+          def confirm(password):
+              body = json.dumps({"uid": link[1], "token": link[2], "new_password": password}).encode()
+              request = urllib.request.Request(
+                  f"{base}/api/v1/auth/password/reset/confirm/", data=body, method="POST",
+                  headers={"Host": host, "X-Forwarded-Proto": "https", "Content-Type": "application/json"},
+              )
+              try:
+                  return urllib.request.urlopen(request).status
+              except urllib.error.HTTPError as exc:
+                  return exc.code
+
+          first, reused = confirm("Ci-Reset-Passphrase-2026"), confirm("Ci-Reset-Passphrase-2027")
+          print(f"confirm with emailed link -> {first} (expected 204); reuse -> {reused} (expected 400)")
+          assert (first, reused) == (204, 400)
+          PY
+
+          out="$(docker exec aems-api python manage.py deliver_password_reset_emails)"
+          echo "$out"
+          grep -q 'claimed=0' <<<"$out"
+          test "$(messages)" = 1
+          echo "Delivered exactly once; the link was single-use"
 
       - name: Show container logs
         if: always()
