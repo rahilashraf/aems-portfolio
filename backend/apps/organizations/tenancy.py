@@ -18,7 +18,9 @@ These ORM write paths refuse to change the organization of an existing row
 (:class:`TenantReassignmentError`), and a rejected operation writes nothing:
 
 - ``Model.save()``, including ``update_fields``, ``force_update``, ``update_or_create()`` and rows
-  loaded with ``only()``/``defer()`` (see :meth:`TenantScopedModel.save`);
+  loaded with ``only()``/``defer()`` (see :meth:`TenantScopedModel.save`). An UPDATE issued by
+  ``save()`` never includes ``organization_id`` (AEMS-014), so even a stale instance cannot
+  rewrite the stored tenant;
 - ``QuerySet.update()`` and ``bulk_update()`` naming ``organization`` or ``organization_id``;
 - ``QuerySet.bulk_create(update_conflicts=True, update_fields=[...])`` naming either field
   (AEMS-012). Plain inserts and conflict updates of other fields are unaffected.
@@ -53,6 +55,8 @@ if TYPE_CHECKING:
 TENANT_FIELD = "organization"
 TENANT_ATTNAME = f"{TENANT_FIELD}_id"
 _TENANT_FIELDS = frozenset({TENANT_FIELD, TENANT_ATTNAME})
+# Model.save() positional parameters (deprecated by Django, still accepted).
+_SAVE_POSITIONAL = ("force_insert", "force_update", "using", "update_fields")
 
 
 class _Unknown:
@@ -151,29 +155,60 @@ class TenantScopedModel(BaseModel):
             self._loaded_organization_id = self.__dict__[TENANT_ATTNAME]
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        force_update = bool(kwargs.get("force_update") or (len(args) > 1 and args[1]))
-        update_fields = kwargs.get("update_fields", args[3] if len(args) > 3 else None)  # noqa: PLR2004
-        updating = force_update or not self._state.adding
+        """Insert, or update without ever writing the organization column.
+
+        - **Insert**: the organization is required, and becomes the baseline once persisted.
+        - **Update**: an in-memory change of the organization raises
+          :class:`TenantReassignmentError` (checked whenever the save would otherwise write it).
+          The UPDATE itself never includes ``organization_id``, so a stale or modified instance
+          cannot rewrite the stored tenant (AEMS-014). The baseline is not changed by updates: it
+          is only ever the value last read from or inserted into the database.
+        """
+        options = dict(zip(_SAVE_POSITIONAL, args, strict=False))
+        options.update(kwargs)
+        update_fields = options.get("update_fields")
+        updating = not options.get("force_insert") and (
+            bool(options.get("force_update")) or not self._state.adding
+        )
 
         if not updating:
             if self.__dict__.get(TENANT_ATTNAME) is None:
                 msg = f"{type(self).__name__} requires an organization."
                 raise MissingTenantContextError(msg)
-        elif self._writes_organization(update_fields):
-            self._check_not_reassigned()
-
-        super().save(*args, **kwargs)
-        if TENANT_ATTNAME in self.__dict__:
+            super().save(**options)
             self._loaded_organization_id = self.__dict__[TENANT_ATTNAME]
+            return
+
+        if self._writes_organization(update_fields):
+            self._check_not_reassigned()
+        options["update_fields"] = self._update_fields_without_organization(update_fields)
+        super().save(**options)
+
+    def _update_fields_without_organization(self, update_fields: Iterable[str] | None) -> list[str]:
+        if update_fields is not None:
+            return [name for name in update_fields if name not in _TENANT_FIELDS]
+        # The fields Django would write for a full save: every loaded, non-generated concrete
+        # field except the primary key, minus the organization.
+        deferred = self.get_deferred_fields()
+        return [
+            field.name
+            for field in self._meta.concrete_fields
+            if not field.primary_key
+            and field.attname not in deferred
+            and field.name != TENANT_FIELD
+            and not getattr(field, "generated", False)
+        ]
 
     def _writes_organization(self, update_fields: Iterable[str] | None) -> bool:
         if update_fields is not None:
             return _names_tenant_field(update_fields)
-        # Django leaves deferred (never loaded, never assigned) fields out of the UPDATE.
+        # A full save would write it unless it is still deferred (never loaded or assigned).
         return TENANT_ATTNAME in self.__dict__
 
     def _check_not_reassigned(self) -> None:
-        current = self.__dict__.get(TENANT_ATTNAME)
+        if TENANT_ATTNAME not in self.__dict__:
+            return  # still deferred: never loaded or assigned, so not changed in memory
+        current = self.__dict__[TENANT_ATTNAME]
         if current is None:
             msg = f"{type(self).__name__} requires an organization."
             raise MissingTenantContextError(msg)
