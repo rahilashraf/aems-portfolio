@@ -706,6 +706,11 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 - **Password-reset token in the URL fragment** (`#uid=…&token=…`), so it is never sent to servers or
   in Referer headers.
 - **Review corrections AEMS-010 and AEMS-011** (ADR-0013): password-reset delivery failures keep the
-  generic `202` and are reported as sanitized security events; delivery is synchronous and not
-  guaranteed, and response timing is not constant (an outbox/worker is a later, separately approved
-  change). Cookie logout resolves the session by the token's signed `sid` **and** `sub`.
+  generic `202` and are reported as sanitized security events. Cookie logout resolves the session
+  by the token's signed `sid` **and** `sub`.
+- **Password-reset email outbox** (ADR-0014; approved scope extension). Requests enqueue into
+  `PasswordResetOutbox` and never contact SMTP, which removes the mail-server timing side channel.
+  The outbox stores no address, token or body: both are derived at send time. The
+  `deliver_password_reset_emails` command delivers with `SKIP LOCKED` claims, leases, bounded
+  retries and expiry. It must be scheduled externally; scheduling and deployment are deferred.
+  This is not a general job queue (Redis/Celery stay out of scope).

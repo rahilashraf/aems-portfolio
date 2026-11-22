@@ -110,33 +110,19 @@ did not fix. It also exposed a dependency on audit persistence, which is schedul
 - **Token validity:** Django's generator, additionally bound to `password_changed_at` and
   `is_active`. It expires after `PASSWORD_RESET_TIMEOUT` (1 hour) and is single-use.
 
-### Password-reset delivery (AEMS-010)
-- **Same response whatever happens.** Every valid request gets the same `202`, body and headers,
-  whether or not the account exists and whether or not the email could be sent. Any exception while
-  sending is caught; otherwise a failing mail server would give existing accounts a `500` and reveal
-  them.
-- **Failures are reported, not discarded.** They are recorded as
-  `auth.password_reset.delivery_failed` (warning level) with the user id, subject digest, client
-  IP, the exception **class** and `expected` (SMTP/network error versus anything else). The
-  exception message is not logged, because transport errors such as `SMTPRecipientsRefused`
-  contain the address. The token is never logged.
-- **Acceptance does not guarantee delivery.** Mail is sent synchronously within the request and is
-  not retried; the user can ask again within the rate limits. The response text says a link
-  "will be sent" if the account exists.
-- **Rate limits are unchanged** and apply before any lookup, for existing and unknown addresses
-  alike.
-- **Timing is not constant.** Measured locally (median of 150 interleaved requests each):
-  - with an in-memory backend, known accounts are about 0.3 ms slower (token generation and
-    message assembly);
-  - with a simulated 50 ms SMTP round trip, they are about 50 ms slower;
-  - with a mail server that hangs, the delay can reach `EMAIL_TIMEOUT` (10 s).
+### Password-reset delivery (AEMS-010, superseded in part by ADR-0014)
+Review correction AEMS-010 first made delivery failures invisible to clients: the response is the
+same `202`, body and headers whether or not the account exists and whether or not sending works.
+Failures are reported as sanitized `auth.password_reset.delivery_failed` events, never with the
+address, the exception message or the token.
 
-  Response time can therefore distinguish existing accounts, bounded by the per-IP and
-  per-address rate limits. An earlier `make_password(None)` "dummy work" call was removed: it
-  hashes nothing, so it never balanced the paths. Removing the side channel requires taking
-  delivery out of the request path (a transactional outbox drained by a worker). That is
-  deliberately not part of Batch 3, which adds no task infrastructure, and needs separate
-  approval.
+That fix still sent mail **synchronously** inside the request. Measured locally, known accounts
+were about 50 ms slower with a simulated 50 ms SMTP round trip, and up to `EMAIL_TIMEOUT` (10 s)
+slower with a stalled server, so response time still revealed account existence.
+[ADR-0014](0014-password-reset-email-outbox.md) removes SMTP from the request: requests only
+enqueue, and `deliver_password_reset_emails` sends. The sanitized-failure and generic-response
+rules above still apply, now in the delivery command. An earlier `make_password(None)` "dummy
+work" call was removed: it hashes nothing, so it never balanced the two paths.
 
 ### Platform admin
 - **Access:** staff only, at a path set by `DJANGO_ADMIN_URL`. The admin login uses the same rate
@@ -178,7 +164,7 @@ event is emitted; nothing claims an audit record is stored.
 
 ## Consequences
 - One indexed session lookup per authenticated request.
-- Password-reset response timing can reveal account existence until delivery leaves the request
-  path (see "Password-reset delivery").
+- Password-reset email delivery leaves the request path (ADR-0014). It then depends on regularly
+  running `deliver_password_reset_emails`, which is not yet scheduled anywhere.
 - The production image does not yet serve the admin's static files; that is a deployment concern.
 - Security events are not yet durable (Batch 5).

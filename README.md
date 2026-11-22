@@ -172,20 +172,43 @@ Design: [ADR-0004](docs/adr/0004-authentication-and-session-management.md) and
 | `POST /api/v1/auth/logout/` | Revoke the current session, clear the cookie | Refresh cookie + CSRF, or bearer |
 | `GET`, `PATCH /api/v1/auth/me/` | Own profile (only `full_name` is editable) | Bearer |
 | `POST /api/v1/auth/password/change/` | Change password; revokes all sessions, returns new tokens | Bearer |
-| `POST /api/v1/auth/password/reset/` | Email a reset link (always `202`) | Public |
+| `POST /api/v1/auth/password/reset/` | Queue a reset email (always `202`; see below) | Public |
 | `POST /api/v1/auth/password/reset/confirm/` | Set a new password (`uid`, `token`, `new_password`) | Public |
 | `GET /api/v1/auth/sessions/` | List own active sessions | Bearer |
 | `DELETE /api/v1/auth/sessions/{id}/` | Revoke one own session | Bearer |
 | `POST /api/v1/auth/sessions/revoke-others/` | Revoke all own sessions except the current one | Bearer |
 
 There is no self-service registration. Accounts are created by platform administrators (and, from
-Batch 7, through organization invitations). Password-reset emails are delivered through `EMAIL_URL`
-(Mailpit locally: http://localhost:8025/). The reset link carries its token in the URL fragment.
-A `202` means the request was accepted, **not** that an email was delivered: it is sent synchronously
-and not retried, and transport failures are logged (`auth.password_reset.delivery_failed`, without
-the address or token) while the response stays identical, so it cannot reveal whether an account
-exists. Response *time* is not constant, because a known account waits for the mail server
-(see ADR-0013).
+Batch 7, through organization invitations).
+
+### Password-reset email delivery
+
+`POST /api/v1/auth/password/reset/` **queues** the email and returns `202`. It never contacts the
+mail server, so the response, its headers and its timing do not depend on SMTP or on whether the
+account exists. A `202` means **accepted, not delivered**. Responses are not mathematically
+constant-time: small database differences remain. See
+[ADR-0014](docs/adr/0014-password-reset-email-outbox.md).
+
+Emails are sent only when the delivery command runs:
+
+```bash
+python manage.py deliver_password_reset_emails            # send due emails (bounded batch)
+python manage.py deliver_password_reset_emails --status   # queue counts as JSON (no personal data)
+```
+
+- **Locally:** `make deliver-reset-emails` (host) or `make docker-deliver-reset-emails`
+  (container), then open Mailpit at http://localhost:8025/. The link carries its token in the URL
+  fragment.
+- **Production:** no scheduler is configured yet (deployment is deferred). Run the command
+  regularly, for example every minute from cron, a systemd timer or a Kubernetes `CronJob`, using
+  the application image and settings. Runs are bounded and safe to overlap.
+- **If it is not running:** requests are still accepted but **no email is sent**. Unsent requests
+  expire after 15 minutes (`AEMS_PASSWORD_RESET_EMAIL_TTL_SECONDS`) and are not sent later.
+- **What is stored:** the outbox holds no address, token or message body. Failures are retried
+  with backoff (up to `AEMS_PASSWORD_RESET_EMAIL_MAX_ATTEMPTS`) and logged as sanitized
+  categories. Delivery is at least once, so a crash at the wrong moment can send a duplicate;
+  every link is still single-use and expiring.
+
 Expired rate-limit records can be removed with `python manage.py purge_auth_rate_limits`.
 
 ## Health endpoints
@@ -213,6 +236,8 @@ All configuration comes from environment variables (see [`.env.example`](.env.ex
 | `DJANGO_PASSWORD_MIN_LENGTH` | `12` | Minimum password length (production refuses less than 12) |
 | `DJANGO_PASSWORD_RESET_TIMEOUT` | `3600` | Reset-link lifetime in seconds |
 | `AEMS_FRONTEND_BASE_URL` | `http://localhost:3000` | Base URL used in password-reset links |
+| `AEMS_PASSWORD_RESET_EMAIL_TTL_SECONDS` | `900` | Queued reset emails not sent within this time are discarded |
+| `AEMS_PASSWORD_RESET_EMAIL_MAX_ATTEMPTS` | `5` | Delivery attempts before a queued email is marked failed |
 | `DJANGO_AUTH_REFRESH_COOKIE_SECURE` | `true` (`false` in local settings) | Secure flag on the refresh cookie (production requires `true`) |
 | `DJANGO_TRUSTED_PROXY_COUNT` | `0` | Number of trusted reverse proxies whose `X-Forwarded-For` entry is used as the client IP |
 | `DJANGO_ADMIN_URL` | `admin/` | Path of the staff-only admin |
