@@ -89,6 +89,7 @@ jobs:
           --health-retries 20
     env:
       DJANGO_SECRET_KEY: ci-only-insecure-secret-key-not-used-outside-this-workflow
+      DJANGO_JWT_SIGNING_KEY: ci-only-insecure-jwt-signing-key-not-used-outside-this-workflow
       DATABASE_URL: postgres://aems_app:ci-only-app-password@localhost:5432/aems
     steps:
       - name: Check out repository
@@ -260,10 +261,12 @@ jobs:
       - name: Production settings refuse unsafe configuration
         run: |
           if docker run --rm -e DJANGO_DEBUG=true -e DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+               -e DJANGO_JWT_SIGNING_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
                -e DJANGO_ALLOWED_HOSTS="$API_HOST" -e DATABASE_URL=postgres://u:p@db:5432/db \
-               --entrypoint python "$IMAGE" -c 'import django; django.setup()'; then
+               --entrypoint python "$IMAGE" -c 'import django; django.setup()' 2> /tmp/refusal.txt; then
             echo "Production settings accepted DJANGO_DEBUG=true"; exit 1
           fi
+          grep -q "DJANGO_DEBUG must be false in production" /tmp/refusal.txt
           echo "DJANGO_DEBUG=true correctly refused"
 
       - name: Start PostgreSQL for the container
@@ -285,6 +288,7 @@ jobs:
         run: |
           docker run -d --name aems-api --network aems-ci -p 127.0.0.1:8000:8000 \
             -e DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+            -e DJANGO_JWT_SIGNING_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
             -e DJANGO_ALLOWED_HOSTS="$API_HOST" \
             -e DJANGO_BEHIND_TLS_PROXY=true \
             -e DATABASE_URL=postgres://aems_app:ci-only-app-password@aems-db:5432/aems \
@@ -331,6 +335,23 @@ jobs:
           got="$(curl -sS -o /dev/null -w '%{http_code}' "$base/health/live/")"
           echo "loopback Host -> $got (expected 400)"
           test "$got" = 400
+
+      - name: Migrate inside the production container and exercise authentication
+        run: |
+          docker exec aems-api python manage.py migrate --noinput
+          docker exec aems-api python manage.py verify_no_default_tables
+          base=http://127.0.0.1:8000
+          got="$(curl -sS -o /tmp/login.json -w '%{http_code}' -H "Host: $API_HOST" \
+            -H "X-Forwarded-Proto: https" -H "Content-Type: application/json" \
+            -d '{"email": "nobody@example.org", "password": "not-a-real-password"}' \
+            "$base/api/v1/auth/login/")"
+          echo "POST /api/v1/auth/login/ (unknown account) -> $got (expected 401)"
+          test "$got" = 401
+          grep -Eq '"code": ?"invalid_credentials"' /tmp/login.json
+          got="$(curl -sS -o /dev/null -w '%{http_code}' -H "Host: $API_HOST" \
+            -H "X-Forwarded-Proto: https" "$base/api/v1/auth/me/")"
+          echo "GET /api/v1/auth/me/ (no token) -> $got (expected 401)"
+          test "$got" = 401
 
       - name: Show container logs
         if: always()
