@@ -43,8 +43,27 @@ So Batch 4 must prepare the lifecycle and authorization without inventing shortc
 Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
 - **`organization`** is a non-null, indexed `PROTECT` foreign key, with `editable=False` so model
   forms and `ModelSerializer` never expose it.
-- **Immutable.** `save()`, `QuerySet.update()` and `bulk_update()` raise `TenantReassignmentError`
-  on any attempt to change it. No reassignment service exists.
+- **Immutable (application level).** Any attempt to change it raises `TenantReassignmentError` and
+  writes nothing. Covered paths:
+  - `save()`, including `update_fields`, `force_update`, `update_or_create()` and rows loaded with
+    `only()`/`defer()`;
+  - `QuerySet.update()` and `bulk_update()`;
+  - `bulk_create(update_conflicts=True)` whose `update_fields` name `organization` or
+    `organization_id` (review finding AEMS-012).
+
+  Plain bulk inserts and conflict updates of other fields still work. No reassignment service
+  exists.
+- **Deferred organization field (AEMS-013).** `from_db()` records the loaded organization id, or
+  "unknown" when the field is deferred.
+  - A record whose organization is still deferred saves without touching or querying it.
+  - A lazy load or `refresh_from_db()` that really reloads the field updates the baseline; a
+    refresh of other fields does not.
+  - Only an instance whose stored organization was never loaded (for example a forced update of an
+    object built in memory) costs one query to read the stored value.
+- **Outside this enforcement.** These checks are **not database-enforced**. Raw SQL, data migrations
+  (historical models), `loaddata` (which saves with `raw=True`) and direct calls to Django
+  internals can still change `organization_id`. Database-level immutability would need a trigger
+  or RLS (Phase 2).
 - **`Model.objects.for_organization(org)`** fails closed: it raises `MissingTenantContextError`
   for a missing or unsaved organization. Saving without an organization raises too.
 - **Default manager.** It still returns all rows, because Django internals need that. Tenant API
