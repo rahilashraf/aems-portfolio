@@ -19,3 +19,4 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0010](0010-request-correlation-and-structured-logging.md) | Request correlation and structured logging | Accepted |
 | [0011](0011-continuous-integration.md) | Continuous integration and required checks | Accepted |
 | [0012](0012-api-access-control-enforcement.md) | API access-control enforcement and the public-endpoint allowlist | Accepted |
+| [0013](0013-authentication-implementation-and-security-events.md) | Authentication implementation and the security-event boundary | Accepted |

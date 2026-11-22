@@ -664,8 +664,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 | Batch | Status | Pull request | Notes |
 |---|---|---|---|
 | 1 — Repository scaffolding | Merged | rahilashraf/aems-portfolio#1 | Review findings AEMS-001…006 resolved before merge |
-| 2 — Core infrastructure & CI | In review | (this batch) | See deviations below |
-| 3–8 | Not started | — | — |
+| 2 — Core infrastructure & CI | Merged | rahilashraf/aems-portfolio#2 | Review findings AEMS-007…009 resolved before merge |
+| 3 — Accounts & authentication | In review | (this batch) | See Batch 3 deviations below |
+| 4–8 | Not started | — | — |
 
 ### Batch 2 deviations from the original plan
 
@@ -688,3 +689,19 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   - client-safe error message conventions (`DomainError`, ADR-0009).
 - **API root endpoint (`GET /api/v1/`)** added as the only Batch 2 API endpoint. It is public, and
   it exercises the allowlist, schema and contract machinery.
+
+### Batch 3 deviations and clarifications (ADR-0013)
+
+- **Security events instead of audit rows.** The replay-detection "audit event" is emitted through
+  the new `apps.core.security_events` interface (a structured log for now). Durable audit
+  persistence stays in Batch 5, and no audit schema was added early.
+- **DRF throttles not used.** The atomic PostgreSQL limiter (`AuthRateLimit`) plus account backoff
+  (`AuthBackoff`) replace the planned coarse DRF throttle layer.
+- **Login is not CSRF-checked.** It accepts only JSON, and cross-origin JSON requires a CORS
+  preflight. CSRF is enforced on the cookie-authenticated refresh and logout operations.
+- **Logout is a public (allowlisted) endpoint**, so an expired access token cannot prevent
+  signing out.
+- **Session-management endpoints added** (`GET /auth/sessions/`, `DELETE /auth/sessions/{id}/`,
+  `POST /auth/sessions/revoke-others/`), as requested by the Batch 3 authorization.
+- **Password-reset token in the URL fragment** (`#uid=…&token=…`), so it is never sent to servers or
+  in Referer headers.

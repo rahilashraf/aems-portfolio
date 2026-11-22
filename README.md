@@ -4,7 +4,7 @@ AEMS is a multi-organization SaaS platform for schools, universities, and traini
 supporting online and paper-based examinations with strict tenant isolation and customizable,
 organization-scoped roles and permissions.
 
-> **Status:** Phase 1 — Backend Foundation, Batch 2 (core infrastructure and CI).
+> **Status:** Phase 1 — Backend Foundation, Batch 3 (accounts and authentication).
 > See the [Phase 1 plan](docs/phase-1-plan.md) and [Architecture Decision Records](docs/adr/README.md).
 
 ## Technology
@@ -76,10 +76,21 @@ Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.13. The database st
 
 ```bash
 make env install hooks   # .env, dependencies, git hooks
-docker compose up -d db
+docker compose up -d db mailpit
+make migrate             # apply migrations to the database in DATABASE_URL
 make test                # pytest + coverage gate (90%)
 make qa                  # every quality gate
 ```
+
+Create a platform administrator, then sign in at http://localhost:8000/admin/ (path configurable
+with `DJANGO_ADMIN_URL`):
+
+```bash
+uv --directory backend run python manage.py createsuperuser
+```
+
+Variables passed on the command line or in the environment override `.env` for `make` targets, for
+example `DATABASE_URL=postgres://... make migrate` migrates that database.
 
 | Command | Purpose |
 |---|---|
@@ -91,7 +102,7 @@ make qa                  # every quality gate
 | `make audit` | pip-audit against the locked dependency set |
 | `make secrets` | detect-secrets scan against `.secrets.baseline` |
 | `make check-migrations` | Fails if models and migrations diverge |
-| `make check-no-auth-tables` | Fails if Django's default auth/admin/session tables exist |
+| `make check-no-auth-tables` | Fails if Django's default `auth_user` tables exist |
 | `make schema` | Regenerates `docs/api/openapi.yaml` |
 | `make schema-check` | Fails if the committed schema differs from the generated one |
 | `make deploy-check` | `manage.py check --deploy` against production settings |
@@ -108,7 +119,8 @@ The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the A
   the project base classes (`AemsAPIView` and others), whose runtime guard refuses unauthenticated
   access to any non-allowlisted endpoint. System checks `core.E001`–`core.E005` catch
   misconfiguration at startup ([ADR-0012](docs/adr/0012-api-access-control-enforcement.md)).
-  There is no authentication until Batch 3.
+  Every other endpoint requires a valid access token; unauthenticated requests receive
+  `401 not_authenticated` with `WWW-Authenticate: Bearer realm="api"`.
 - **Errors**: RFC 9457 Problem Details (`application/problem+json`) with a stable `code` and the
   `request_id` ([ADR-0009](docs/adr/0009-api-error-response-conventions.md)). `WWW-Authenticate`,
   `Retry-After` and `Allow` headers are preserved.
@@ -125,11 +137,51 @@ The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the A
 | Endpoint | Description | Access |
 |---|---|---|
 | `GET /api/v1/` | API root (service name and API version) | Public |
+| `/api/v1/auth/...` | Authentication, profile, passwords and sessions (see below) | Mixed |
 | `GET /api/schema/` | OpenAPI 3 schema | Public when `API_DOCS_ENABLED`; always 404 in production |
 | `GET /api/docs/`, `GET /api/redoc/` | Swagger UI / ReDoc | Same as above |
 
 The committed contract lives at [`docs/api/openapi.yaml`](docs/api/openapi.yaml). Regenerate it
 with `make schema`; CI fails if it is stale.
+
+## Authentication
+
+Design: [ADR-0004](docs/adr/0004-authentication-and-session-management.md) and
+[ADR-0013](docs/adr/0013-authentication-implementation-and-security-events.md).
+
+- **Access token**: a JWT valid for 10 minutes, returned in the JSON body and sent as
+  `Authorization: Bearer <token>`. Clients keep it in memory only, never in
+  `localStorage`/`sessionStorage`.
+- **Refresh token**: kept only in the `aems_refresh` cookie (`HttpOnly`, `Secure`,
+  `SameSite=Strict`, `Path=/api/v1/auth/`). It is never in a response body. It lasts 7 days and is
+  rotated on every refresh; each sign-in session has an absolute lifetime of 30 days.
+- **Server-side sessions**: each sign-in creates an `AuthSession`. Every request checks that the
+  session and user are still valid, so logout, password changes, deactivation and replay detection
+  take effect **immediately**. Reusing an already-rotated refresh token revokes the whole session.
+- **CSRF**: cookie-authenticated calls (refresh, and logout with the cookie) require the
+  `X-CSRFToken` header (the `csrftoken` cookie value from `GET /api/v1/auth/csrf/`) and a
+  same-origin `Origin`/`Referer`.
+- **Abuse protection**: atomic PostgreSQL rate limits per IP and account, plus a temporary
+  exponential lockout after repeated failures. Responses never reveal whether an account exists.
+
+| Endpoint | Purpose | Access |
+|---|---|---|
+| `GET /api/v1/auth/csrf/` | Set the CSRF cookie | Public |
+| `POST /api/v1/auth/login/` | Sign in (`email`, `password`) → access token + refresh cookie | Public |
+| `POST /api/v1/auth/token/refresh/` | Rotate the refresh cookie → new access token | Refresh cookie + CSRF |
+| `POST /api/v1/auth/logout/` | Revoke the current session, clear the cookie | Refresh cookie + CSRF, or bearer |
+| `GET`, `PATCH /api/v1/auth/me/` | Own profile (only `full_name` is editable) | Bearer |
+| `POST /api/v1/auth/password/change/` | Change password; revokes all sessions, returns new tokens | Bearer |
+| `POST /api/v1/auth/password/reset/` | Email a reset link (always `202`) | Public |
+| `POST /api/v1/auth/password/reset/confirm/` | Set a new password (`uid`, `token`, `new_password`) | Public |
+| `GET /api/v1/auth/sessions/` | List own active sessions | Bearer |
+| `DELETE /api/v1/auth/sessions/{id}/` | Revoke one own session | Bearer |
+| `POST /api/v1/auth/sessions/revoke-others/` | Revoke all own sessions except the current one | Bearer |
+
+There is no self-service registration. Accounts are created by platform administrators (and, from
+Batch 7, through organization invitations). Password-reset emails are delivered through `EMAIL_URL`
+(Mailpit locally: http://localhost:8025/). The reset link carries its token in the URL fragment.
+Expired rate-limit records can be removed with `python manage.py purge_auth_rate_limits`.
 
 ## Health endpoints
 
@@ -150,7 +202,15 @@ All configuration comes from environment variables (see [`.env.example`](.env.ex
 | `DJANGO_LOG_LEVEL` | `INFO` | Root log level (SQL logging is always suppressed) |
 | `DJANGO_API_DOCS_ENABLED` | `false` (`true` in local settings) | Serve schema/Swagger/ReDoc; production refuses `true` |
 | `DJANGO_CORS_ALLOWED_ORIGINS` | none (`http://localhost:3000` locally) | Explicit origin allowlist; no wildcards; HTTPS required in production |
-| `DJANGO_CORS_ALLOW_CREDENTIALS` | `false` | Cross-origin cookies (needed for the Batch 3 refresh-cookie flow) |
+| `DJANGO_CORS_ALLOW_CREDENTIALS` | `false` | Cross-origin cookies (set `true` when the frontend runs on another origin) |
+| `DJANGO_JWT_SIGNING_KEY` | — (required) | Dedicated JWT signing key; production requires 50+ random characters, different from `DJANGO_SECRET_KEY` |
+| `DJANGO_JWT_ISSUER` / `DJANGO_JWT_AUDIENCE` | unset | Optional `iss`/`aud` claims, enforced when set |
+| `DJANGO_PASSWORD_MIN_LENGTH` | `12` | Minimum password length (production refuses less than 12) |
+| `DJANGO_PASSWORD_RESET_TIMEOUT` | `3600` | Reset-link lifetime in seconds |
+| `AEMS_FRONTEND_BASE_URL` | `http://localhost:3000` | Base URL used in password-reset links |
+| `DJANGO_AUTH_REFRESH_COOKIE_SECURE` | `true` (`false` in local settings) | Secure flag on the refresh cookie (production requires `true`) |
+| `DJANGO_TRUSTED_PROXY_COUNT` | `0` | Number of trusted reverse proxies whose `X-Forwarded-For` entry is used as the client IP |
+| `DJANGO_ADMIN_URL` | `admin/` | Path of the staff-only admin |
 
 Every environment refuses to start unless `DATABASE_URL` resolves to the PostgreSQL backend
 (`postgres://`, `postgresql://`, or `pgsql://`); SQLite and other engines are rejected.
@@ -163,7 +223,9 @@ Every environment refuses to start unless `DATABASE_URL` resolves to the Postgre
 - `DJANGO_SECRET_KEY` is missing, shorter than 50 characters, low-variety, or a placeholder;
 - `DJANGO_ALLOWED_HOSTS` is empty or contains `*`;
 - `DJANGO_API_DOCS_ENABLED` is true;
-- a CORS origin is a wildcard, `null`, malformed, or not HTTPS.
+- a CORS origin is a wildcard, `null`, malformed, or not HTTPS;
+- `DJANGO_JWT_SIGNING_KEY` is missing, weak, a placeholder, or equal to `DJANGO_SECRET_KEY`;
+- the refresh cookie is not `Secure`, or `DJANGO_PASSWORD_MIN_LENGTH` is below 12.
 
 **Trusted TLS proxy (`DJANGO_BEHIND_TLS_PROXY`, default `false`).** When enabled, Django treats a
 request as HTTPS if it carries `X-Forwarded-Proto: https`. Enable it **only** when every request
