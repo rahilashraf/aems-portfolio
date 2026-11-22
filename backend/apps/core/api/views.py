@@ -46,6 +46,7 @@ class ApiRootView(AemsAPIView):
     """Public API entry point. Exposes no version numbers of the software stack."""
 
     permission_classes = [PublicEndpoint]
+    authentication_classes = []
 
     @extend_schema(
         operation_id="api_root",

@@ -72,12 +72,9 @@ class TestStaticChecks:
         assert any("UnguardedPublicView" in m for i, m in found if i == "core.E004")
 
     def test_test_allowlist_matches_fixture_names(self) -> None:
-        extra = set(settings.API_PUBLIC_ENDPOINTS) - {
-            "api-v1:root",
-            "api-schema",
-            "api-docs",
-            "api-redoc",
-        }
+        from config.settings import base  # noqa: PLC0415
+
+        extra = set(settings.API_PUBLIC_ENDPOINTS) - set(base.API_PUBLIC_ENDPOINTS)
         assert extra == set(PUBLIC_FIXTURE_NAMES)
 
 
@@ -98,7 +95,9 @@ class TestRuntimeGuard:
     ) -> None:
         response = Client().get(path)
 
-        body = assert_problem(response, 403, "permission_denied")
+        # Authentication exists (Batch 3): unauthenticated access is challenged with 401.
+        body = assert_problem(response, 401, "not_authenticated")
+        assert response["WWW-Authenticate"] == 'Bearer realm="api"'
         assert "reached" not in body
         [event] = json_logs.events("security.public_access_blocked")
         assert event["level"] == "error"
@@ -106,7 +105,7 @@ class TestRuntimeGuard:
     def test_unlisted_public_endpoint_is_refused_by_the_permission_itself(
         self, assert_problem: AssertProblem, json_logs: Any
     ) -> None:
-        assert_problem(Client().get("/test-api/unlisted-public/"), 403, "permission_denied")
+        assert_problem(Client().get("/test-api/unlisted-public/"), 401, "not_authenticated")
         [event] = json_logs.events("security.public_endpoint_not_allowlisted")
         assert event["view_name"] == "test-unlisted-public"
 
@@ -126,8 +125,8 @@ class TestRuntimeGuard:
 @pytest.mark.urls("tests.fixtures_app.urls_duplicate")
 def test_duplicate_url_name_cannot_borrow_an_allowlist_entry(assert_problem: AssertProblem) -> None:
     # "test-echo" is allowlisted but registered twice: fail closed for BOTH routes.
-    assert_problem(Client().get("/test-api/echo/"), 403, "permission_denied")
-    assert_problem(Client().get("/test-api/echo-shadow/"), 403, "permission_denied")
+    assert_problem(Client().get("/test-api/echo/"), 401, "not_authenticated")
+    assert_problem(Client().get("/test-api/echo-shadow/"), 401, "not_authenticated")
 
 
 class TestRuntimeHelpers:

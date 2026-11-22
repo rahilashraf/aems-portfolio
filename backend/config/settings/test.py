@@ -8,6 +8,9 @@ import os
 
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-insecure-secret-key-not-for-production")
 os.environ.setdefault("DATABASE_URL", "postgres://aems_app:aems_app@localhost:5432/aems")
+os.environ.setdefault(
+    "DJANGO_JWT_SIGNING_KEY", "test-only-jwt-signing-key-not-for-production-0123456789abcdef"
+)
 
 from apps.core.logging import build_logging_config
 
@@ -17,7 +20,8 @@ from .base import API_PUBLIC_ENDPOINTS, INSTALLED_APPS
 DEBUG = False
 ALLOWED_HOSTS = ["testserver", "localhost"]
 
-# Fast, deterministic hashing in tests only. Production hashing (Argon2id) arrives in Batch 3.
+# Fast hashing in tests only; production hashing (Argon2id) is covered by dedicated tests that
+# override this setting.
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"

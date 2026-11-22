@@ -138,7 +138,8 @@ def test_request_logging_redacts_sensitive_data_end_to_end(json_logs: Any) -> No
         "/test-api/sensitive-logging/?api_key=query_secret_1",
         {"password": "body_secret_pw"},
         content_type="application/json",
-        HTTP_AUTHORIZATION="Bearer header_secret_tok",
+        # A non-Bearer scheme is ignored by authentication, so the view runs and logs it.
+        HTTP_AUTHORIZATION="Basic header_secret_tok",
         HTTP_X_REQUEST_ID="sensitive-req-01",
     )
 

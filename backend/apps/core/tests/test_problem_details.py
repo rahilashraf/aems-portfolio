@@ -107,9 +107,13 @@ class TestValidationErrors:
 
 
 class TestAuthenticationAndAuthorization:
-    def test_default_permission_denies(self, client: Client, assert_problem: AssertProblem):
-        body = assert_problem(client.get("/test-api/implicit/"), 403, "permission_denied")
-        assert body["title"] == "Forbidden"
+    def test_default_permission_requires_authentication(
+        self, client: Client, assert_problem: AssertProblem
+    ):
+        response = client.get("/test-api/implicit/")
+        body = assert_problem(response, 401, "not_authenticated")
+        assert body["title"] == "Unauthorized"
+        assert response["WWW-Authenticate"] == 'Bearer realm="api"'
 
     def test_not_authenticated_keeps_www_authenticate(
         self, client: Client, assert_problem: AssertProblem

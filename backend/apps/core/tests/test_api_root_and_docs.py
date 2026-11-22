@@ -73,7 +73,8 @@ class TestSchema:
         assert schema["info"]["version"] == "v1"
 
     def test_only_versioned_api_paths(self, schema: dict[str, Any]) -> None:
-        assert set(schema["paths"]) == {"/api/v1/"}
+        assert "/api/v1/" in schema["paths"]
+        assert all(path.startswith("/api/v1/") for path in schema["paths"])
 
     def test_problem_responses_documented(self, schema: dict[str, Any]) -> None:
         responses = schema["paths"]["/api/v1/"]["get"]["responses"]
@@ -142,13 +143,16 @@ class TestPublicEndpointAllowlist:
     def test_manage_check_passes(self) -> None:
         call_command("check", "--fail-level", "ERROR")
 
-    def test_default_permission_is_deny_all(self) -> None:
+    def test_default_permission_requires_authentication(self) -> None:
+        from rest_framework.permissions import IsAuthenticated  # noqa: PLC0415
         from rest_framework.settings import api_settings  # noqa: PLC0415
 
+        from apps.accounts.authentication import SessionJWTAuthentication  # noqa: PLC0415
+
         permission_classes: Any = api_settings.DEFAULT_PERMISSION_CLASSES
-        assert permission_classes == [DenyAll]
-        assert api_settings.DEFAULT_AUTHENTICATION_CLASSES == []
-        assert api_settings.UNAUTHENTICATED_USER is None
+        assert permission_classes == [IsAuthenticated]
+        authentication_classes: Any = api_settings.DEFAULT_AUTHENTICATION_CLASSES
+        assert authentication_classes == [SessionJWTAuthentication]
 
 
 def test_deny_all_denies_object_access() -> None:
