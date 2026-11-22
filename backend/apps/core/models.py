@@ -5,20 +5,11 @@ timezone-aware creation/modification timestamps (``USE_TZ=True``; values are sto
 
 These classes are abstract: they create no tables or migrations by themselves.
 
-Tenant scoping (extension strategy, Batch 4)
---------------------------------------------
-Organization-owned models will inherit a ``TenantScopedModel`` defined alongside the
-``organizations`` app, built on top of :class:`BaseModel`::
-
-    class TenantScopedModel(BaseModel):
-        organization = models.ForeignKey("organizations.Organization", on_delete=models.PROTECT)
-        objects = TenantQuerySet.as_manager()  # .for_organization(org)
-
-        class Meta:
-            abstract = True
-
-It is deliberately not defined here yet: it requires the concrete ``Organization`` model, and
-defining it early would create a dangling dependency from ``core`` on a domain app.
+Tenant scoping
+--------------
+Organization-owned models inherit ``apps.organizations.tenancy.TenantScopedModel`` (built on
+:class:`BaseModel`). It lives in the ``organizations`` app because it references the concrete
+``Organization`` model; ``core`` stays free of domain dependencies (ADR-0015).
 """
 
 import uuid

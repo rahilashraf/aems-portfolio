@@ -1,7 +1,7 @@
 """Version 1 of the REST API (mounted at ``/api/v1/``, namespace ``api-v1``).
 
-Domain apps add their routes here in later batches, e.g.
-``path("organizations/", include("apps.organizations.api.urls"))``.
+Tenant routes live under ``organizations/<uuid:org_id>/`` and must use
+``OrganizationScopedViewMixin`` (route-coverage meta-test, ADR-0015).
 """
 
 from django.urls import include, path
@@ -13,4 +13,6 @@ app_name = "api-v1"
 urlpatterns = [
     path("", ApiRootView.as_view(), name="root"),
     path("auth/", include("apps.accounts.api.urls", namespace="auth")),
+    path("organizations/", include("apps.organizations.api.urls", namespace="organizations")),
+    path("platform/", include("apps.organizations.api.platform_urls", namespace="platform")),
 ]

@@ -8,7 +8,7 @@ from rest_framework.routers import SimpleRouter
 
 from config.urls import urlpatterns as project_urlpatterns
 
-from . import views
+from . import tenant_views, views
 
 router = SimpleRouter()
 router.register("test-api/actions", views.ActionPermissionsViewSet, basename="test-actions")
@@ -39,6 +39,16 @@ PUBLIC_FIXTURE_NAMES = (
 urlpatterns = [
     *project_urlpatterns,
     path("", include(router.urls)),
+    path(
+        "test-api/organizations/<uuid:org_id>/notes/",
+        tenant_views.TenantNoteListView.as_view(),
+        name="test-tenant-notes",
+    ),
+    path(
+        "test-api/organizations/<uuid:org_id>/notes/<str:note_id>/",
+        tenant_views.TenantNoteDetailView.as_view(),
+        name="test-tenant-note",
+    ),
     path("test-api/empty-permissions/", views.EmptyPermissionsView.as_view(), name="test-empty"),
     path("test-api/custom-permissive/", views.CustomPermissiveView.as_view(), name="test-custom"),
     path("test-api/dynamic/", views.DynamicPermissionsView.as_view(), name="test-dynamic"),
