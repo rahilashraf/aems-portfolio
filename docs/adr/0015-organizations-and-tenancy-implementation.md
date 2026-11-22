@@ -60,6 +60,16 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
     refresh of other fields does not.
   - Only an instance whose stored organization was never loaded (for example a forced update of an
     object built in memory) costs one query to read the stored value.
+- **Updates never write the organization column (AEMS-014).**
+  - An UPDATE issued by `save()` always leaves out `organization_id`: the full save uses explicit
+    `update_fields` without it, and the organization is removed from caller-supplied
+    `update_fields`.
+  - The baseline is the organization last read from (load, lazy load, reload) or inserted into
+    the database. Updates never change it, whether partial, empty, failed or rolled back. A
+    reassignment made in memory therefore still fails at the next save that would write it, and
+    a stale instance cannot undo a change made elsewhere.
+  - As a consequence, saving an instance whose row has been deleted raises `DatabaseError`
+    instead of silently re-inserting the row.
 - **Outside this enforcement.** These checks are **not database-enforced**. Raw SQL, data migrations
   (historical models), `loaddata` (which saves with `raw=True`) and direct calls to Django
   internals can still change `organization_id`. Database-level immutability would need a trigger
