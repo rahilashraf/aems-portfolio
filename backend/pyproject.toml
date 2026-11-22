@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "AEMS — Assessment & Examination Management System (backend)"
 readme = "../README.md"
 requires-python = ">=3.13,<3.14"
-license = { text = "Proprietary" }
+# All rights reserved; see ../LICENSE. A PEP 639 custom "LicenseRef-" identifier is used because
+# no open-source licence applies. Third-party dependencies remain under their own licences.
+license = "LicenseRef-AllRightsReserved"
 dependencies = [
     "django>=5.2.8,<5.3",
     "django-cors-headers>=4.9,<5",

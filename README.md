@@ -198,3 +198,14 @@ push to `main`, with no path filters ([ADR-0011](docs/adr/0011-continuous-integr
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+Copyright (c) 2026 Rahil Ashraf. All rights reserved.
+
+AEMS is publicly available for portfolio demonstration and educational reference. Public
+availability does not grant permission to reuse, redistribute, modify, or commercially exploit the
+source code. See [LICENSE](LICENSE) for details.
+
+Third-party dependencies are licensed separately under their own terms, which this notice does not
+replace or modify.
