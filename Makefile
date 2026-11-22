@@ -121,7 +121,9 @@ security: ## Static security analysis
 	$(UV) run bandit -c pyproject.toml -r apps config scripts
 
 secrets: ## Scan tracked files for committed secrets (detect-secrets baseline)
-	uv run --project $(BACKEND) pre-commit run detect-secrets --all-files
+	uv run --project $(BACKEND) pre-commit run detect-secrets --all-files \
+		|| { echo "--- .secrets.baseline changes made by the hook:"; \
+		     git --no-pager diff -- .secrets.baseline; exit 1; }
 
 # OpenAPI contract. Generated with the test settings so the output never depends on a local .env.
 SCHEMA_FILE := docs/api/openapi.yaml
