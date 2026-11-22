@@ -8,9 +8,12 @@ SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 .DEFAULT_GOAL := help
 
-# Load local development variables (if present) for host-side commands.
--include .env
-export $(shell sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env 2>/dev/null)
+# Load local development variables (if present) for host-side commands. Each .env value is only a
+# default (?=): variables already set in the environment or on the command line take precedence,
+# e.g. `DATABASE_URL=... make migrate` really targets that database.
+ENV_FILE_VARS := $(shell sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' .env 2>/dev/null)
+$(foreach var,$(ENV_FILE_VARS),$(eval $(var) ?= $(shell sed -n 's/^$(var)=//p' .env)))
+export $(ENV_FILE_VARS)
 
 BACKEND := backend
 UV := uv --directory $(BACKEND)
@@ -140,6 +143,7 @@ deploy-check: ## Django deployment checklist against production settings
 	DJANGO_SETTINGS_MODULE=config.settings.production DJANGO_DEBUG=false \
 	DJANGO_API_DOCS_ENABLED=false DJANGO_CORS_ALLOWED_ORIGINS= DJANGO_LOG_FORMAT=json \
 	DJANGO_SECRET_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+	DJANGO_JWT_SIGNING_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_ALLOWED_HOSTS=api.example.org \
 	DATABASE_URL=postgres://u:p@localhost:5432/db \
 	$(UV) run python manage.py check --deploy --fail-level WARNING
