@@ -141,7 +141,7 @@ Runtime (pinned via `uv.lock`; ranges in `pyproject.toml` stay within Django 5.2
 | django-filter | Filtering | Batch 2 |
 | djangorestframework-simplejwt | JWT encoding/validation primitives | Batch 3 |
 | argon2-cffi | Argon2id password hashing | Batch 3 |
-| django-cors-headers | CORS allowlist | Batch 3 |
+| django-cors-headers | CORS allowlist (secure defaults; credentials enabled in Batch 3) | Batch 2 |
 
 Development: pytest, pytest-django, pytest-cov, factory-boy, time-machine, ruff, mypy,
 django-stubs (5.2 line), djangorestframework-stubs, bandit, pip-audit, pre-commit, detect-secrets.
@@ -620,10 +620,11 @@ Coverage gate **90%** (branch coverage), target 100% for `accounts`, `organizati
 
 ## 12. CI (GitHub Actions) — Batch 2
 
-- Triggers: `pull_request` and `push` to `main`, path filters covering `backend/**`,
-  `docker/**`, `docker-compose.yml`, `.env.example`, `Makefile`, `.pre-commit-config.yaml`,
-  `docs/api/**`, `.github/workflows/**`, `.github/dependabot.yml` (dependencies and migrations
-  live under `backend/`). A `workflow_dispatch` trigger for manual runs.
+- Triggers: `pull_request` and `push` to `main`, **without path filters**. Every pull request
+  produces every check result, so required checks cannot be bypassed through path-filter
+  omissions (the Batch 2 authorization preferred this over the broadened filters originally
+  listed here). No `workflow_dispatch`, because CI is never triggered manually.
+- As implemented: see [ADR-0011](adr/0011-continuous-integration.md) for the job and check names.
 - Jobs: **lint** (ruff check/format, mypy), **test** (PostgreSQL 17 service, `uv sync --frozen`,
   `makemigrations --check --dry-run`, `migrate`, full pytest incl. security/isolation/concurrency
   suites, coverage ≥ 90%), **security** (pip-audit, bandit), **schema** (OpenAPI drift),
@@ -655,3 +656,35 @@ One pull request per batch, each with its own tests and documentation, stopping 
 
 Examination/assessment/course/student domain models, frontend, MFA/SSO, self-service signup,
 billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, AI features.
+
+---
+
+## 15. Implementation progress
+
+| Batch | Status | Pull request | Notes |
+|---|---|---|---|
+| 1 — Repository scaffolding | Merged | rahilashraf/aems-portfolio#1 | Review findings AEMS-001…006 resolved before merge |
+| 2 — Core infrastructure & CI | In review | (this batch) | See deviations below |
+| 3–8 | Not started | — | — |
+
+### Batch 2 deviations from the original plan
+
+- **django-cors-headers moved from Batch 3 to Batch 2**, because the Batch 2 authorization asked for
+  secure, environment-based CORS defaults. There are no origins by default, credentials are off,
+  and production requires HTTPS origins.
+- **djangorestframework-stubs 3.16.x with DRF 3.18.x.** Stub releases 3.17 and later require
+  django-stubs 6.x (Django 6). The 3.16 line is the newest that works with Django 5.2 LTS. Runtime
+  DRF stays on the latest release for security fixes.
+- **Problem `type` is `about:blank`** with a stable `code` member (ADR-0009 refines ADR-0007),
+  because AEMS has no owned, dereferenceable problem-type URI host yet.
+- **No DRF versioning class.** Versioning is the `/api/v1/` URL prefix and the `api-v1` URL
+  namespace, which is simpler and documented in the schema.
+- **django-structlog not adopted** (ADR-0010). A first-party middleware keeps client-IP and
+  path-logging policies explicit.
+- **gunicorn access log disabled** in the production image, because it would log query strings.
+- **Review corrections AEMS-007–009** (before merge):
+  - layered allowlist enforcement with a runtime guard and five system checks (ADR-0012);
+  - bounded, cycle-safe log redaction and text sanitization;
+  - client-safe error message conventions (`DomainError`, ADR-0009).
+- **API root endpoint (`GET /api/v1/`)** added as the only Batch 2 API endpoint. It is public, and
+  it exercises the allowlist, schema and contract machinery.

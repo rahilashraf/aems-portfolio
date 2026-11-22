@@ -27,6 +27,8 @@ All commits are authored on behalf of the repository owner, GitHub account `rahi
   similar AI attribution lines to commit messages.
 - Never add "Generated with/by Claude Code" (or similar) footers or links to commit messages,
   pull request descriptions, issue or review comments, documentation, or application interfaces.
+  Some tools append such footers automatically: after creating or editing a pull request, issue
+  or comment, re-read the published text and remove any footer or session link that appears.
 - Write neutral, professional commit messages (conventional prefix such as `feat:`, `fix:`,
   `docs:`, `chore:`, `test:`, `ci:`; imperative subject; explanatory body where useful).
 - Preserve accurate attribution for third-party code or contributions (licence headers,

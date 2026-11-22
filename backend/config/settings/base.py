@@ -9,7 +9,9 @@ from typing import Any
 
 import environ
 
-from .validation import validate_database_engine
+from apps.core.logging import LOG_FORMATS, build_logging_config
+
+from .validation import validate_cors_origins, validate_database_engine, validate_log_format
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -26,20 +28,38 @@ ALLOWED_HOSTS: list[str] = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 DJANGO_APPS: list[str] = [
     "django.contrib.staticfiles",
 ]
-THIRD_PARTY_APPS: list[str] = []
+THIRD_PARTY_APPS: list[str] = [
+    "corsheaders",
+    "rest_framework",
+    "django_filters",
+    "drf_spectacular",
+]
 LOCAL_APPS: list[str] = [
     "apps.core",
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # First: assigns the request ID and binds log context for everything below it.
+    "apps.core.middleware.RequestContextMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
+
+# Templates are only needed by the (development-only) Swagger UI and ReDoc pages.
+TEMPLATES: list[dict[str, Any]] = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {"context_processors": ["django.template.context_processors.request"]},
+    },
+]
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
@@ -88,21 +108,81 @@ X_FRAME_OPTIONS = "DENY"
 CSRF_COOKIE_HTTPONLY = False  # the SPA must read it for the double-submit pattern (ADR-0004)
 CSRF_TRUSTED_ORIGINS: list[str] = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2_621_440  # 2.5 MiB request body cap
+# CSRF failures (e.g. on the future cookie-authenticated refresh endpoint) return Problem Details.
+CSRF_FAILURE_VIEW = "apps.core.errors.csrf_failure"
+
+# --------------------------------------------------------------------------- CORS
+# Secure default: no cross-origin access. Origins must be listed explicitly; credentials are off
+# until the cookie-based refresh flow is implemented (Batch 3, ADR-0004).
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS: list[str] = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
+validate_cors_origins(CORS_ALLOWED_ORIGINS, require_https=False)
+CORS_ALLOW_CREDENTIALS: bool = env.bool("DJANGO_CORS_ALLOW_CREDENTIALS", default=False)
+CORS_URLS_REGEX = r"^/api/.*$"
+CORS_EXPOSE_HEADERS = ["X-Request-ID", "Retry-After"]
+CORS_PREFLIGHT_MAX_AGE = 600
+
+# --------------------------------------------------------------------------- REST API
+REST_FRAMEWORK: dict[str, Any] = {
+    # No authentication mechanism exists until Batch 3. An empty list (instead of DRF's session/
+    # basic defaults) avoids importing django.contrib.auth, which is intentionally not installed.
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "UNAUTHENTICATED_USER": None,
+    # Deny by default. Public endpoints opt in with PublicEndpoint + API_PUBLIC_ENDPOINTS.
+    "DEFAULT_PERMISSION_CLASSES": ["apps.core.api.permissions.DenyAll"],
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    "DEFAULT_PAGINATION_CLASS": "apps.core.api.pagination.StandardPagination",
+    "PAGE_SIZE": 25,
+    "DEFAULT_FILTER_BACKENDS": [
+        "apps.core.api.filtering.AllowlistFilterBackend",
+        "apps.core.api.filtering.StableOrderingFilter",
+    ],
+    "ORDERING_PARAM": "ordering",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "apps.core.api.exceptions.problem_exception_handler",
+    "DEFAULT_THROTTLE_CLASSES": [],
+    "TEST_REQUEST_DEFAULT_FORMAT": "json",
+    "DATETIME_FORMAT": "iso-8601",
+    "COERCE_DECIMAL_TO_STRING": True,
+    "STRICT_JSON": True,
+}
+
+# URL names of endpoints that may be reached without authentication. Enforced by the
+# core.E001/core.E002 system checks (apps/core/checks.py).
+API_PUBLIC_ENDPOINTS: tuple[str, ...] = (
+    "api-v1:root",
+    "api-schema",
+    "api-docs",
+    "api-redoc",
+)
+
+# OpenAPI documentation endpoints. Off unless explicitly enabled; production forces it off.
+API_DOCS_ENABLED: bool = env.bool("DJANGO_API_DOCS_ENABLED", default=False)
+
+SPECTACULAR_SETTINGS: dict[str, Any] = {
+    "TITLE": "AEMS API",
+    "DESCRIPTION": (
+        "Assessment & Examination Management System REST API. "
+        "Errors use RFC 9457 Problem Details (`application/problem+json`)."
+    ),
+    "VERSION": "v1",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["apps.core.api.permissions.PublicEndpoint"],
+    "SERVE_AUTHENTICATION": [],
+    "SCHEMA_PATH_PREFIX": r"/api/v1",
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SORT_OPERATIONS": True,
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+        "apps.core.api.openapi.add_problem_responses",
+    ],
+}
 
 # --------------------------------------------------------------------------- logging
-# Structured JSON logging (structlog) replaces this in Batch 2.
+# structlog renders both application and standard-library logs. JSON by default (production);
+# local development switches to readable console output.
 LOG_LEVEL: str = env.str("DJANGO_LOG_LEVEL", default="INFO")
-LOGGING: dict[str, Any] = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {"format": "%(asctime)s %(levelname)s %(name)s %(message)s"},
-    },
-    "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "standard"},
-    },
-    "root": {"handlers": ["console"], "level": LOG_LEVEL},
-    "loggers": {
-        "django": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
-    },
-}
+LOG_FORMAT: str = env.str("DJANGO_LOG_FORMAT", default="json")
+validate_log_format(LOG_FORMAT, LOG_FORMATS)
+LOGGING: dict[str, Any] = build_logging_config(level=LOG_LEVEL, log_format=LOG_FORMAT)  # type: ignore[arg-type]

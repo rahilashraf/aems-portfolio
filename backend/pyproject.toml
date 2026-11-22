@@ -4,18 +4,27 @@ version = "0.1.0"
 description = "AEMS — Assessment & Examination Management System (backend)"
 readme = "../README.md"
 requires-python = ">=3.13,<3.14"
-license = { text = "Proprietary" }
+# All rights reserved; see ../LICENSE. A PEP 639 custom "LicenseRef-" identifier is used because
+# no open-source licence applies. Third-party dependencies remain under their own licences.
+license = "LicenseRef-AllRightsReserved"
 dependencies = [
     "django>=5.2.8,<5.3",
+    "django-cors-headers>=4.9,<5",
     "django-environ>=0.12,<1.0",
-    "psycopg[binary]>=3.2,<4",
+    "django-filter>=25.1,<27",
+    "djangorestframework>=3.18,<3.19",
+    "drf-spectacular>=0.30,<0.31",
     "gunicorn>=23",
+    "psycopg[binary]>=3.2,<4",
+    "structlog>=25.4,<27",
 ]
 
 [dependency-groups]
 dev = [
     "bandit>=1.8",
     "django-stubs[compatible-mypy]>=5.2,<5.3",
+    # 3.17+ stubs require django-stubs 6.x (Django 6); 3.16.x is the newest line for Django 5.2.
+    "djangorestframework-stubs[compatible-mypy]>=3.16.9,<3.17",
     "pip-audit>=2.9",
     "pre-commit>=4",
     "pytest>=8.4",
@@ -50,7 +59,11 @@ select = [
     "PL",            # pylint subset
     "N",             # naming
 ]
-ignore = ["PLR0913"]
+ignore = [
+    "PLR0913",
+    # Django/DRF declare configuration as class attributes (permission_classes = [...]).
+    "RUF012",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**/*.py" = ["S101", "PLR2004", "S105", "S106", "S603"]
@@ -68,7 +81,7 @@ warn_unreachable = true
 exclude = ["/migrations/"]
 
 [[tool.mypy.overrides]]
-module = ["environ", "environ.*"]
+module = ["environ", "environ.*", "django_filters", "django_filters.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -83,7 +96,7 @@ django_settings_module = "config.settings.test"
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["test_*.py"]
-testpaths = ["apps", "config", "scripts"]
+testpaths = ["apps", "config", "scripts", "tests"]
 addopts = [
     "--strict-markers",
     "--strict-config",

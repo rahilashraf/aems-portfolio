@@ -1,0 +1,55 @@
+# Automated dependency update pull requests. Every update goes through the normal PR review and
+# the Backend CI checks; nothing is merged automatically.
+version: 2
+updates:
+  # Python dependencies (uv: backend/pyproject.toml + backend/uv.lock).
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      python-dev-tooling:
+        dependency-type: development
+      python-runtime-minor-and-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+    ignore:
+      # Django stays on the 5.2 LTS line until an explicit upgrade decision (ADR-0002).
+      - dependency-name: django
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      # django-stubs and DRF stubs must track the Django line (5.2); 6.x stubs target Django 6.
+      - dependency-name: django-stubs
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: djangorestframework-stubs
+        update-types: [version-update:semver-minor]
+
+  # Base images in backend/Dockerfile.
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(docker)"
+    ignore:
+      # Python minor upgrades are deliberate decisions (requires-python pins 3.13).
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+
+  # Pinned GitHub Actions (full commit SHAs with version comments).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns: ["*"]

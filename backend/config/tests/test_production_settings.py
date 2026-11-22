@@ -171,3 +171,44 @@ class TestDatabaseEngineEnforcement:
         assert result.returncode != 0
         assert "ImproperlyConfigured" in result.stderr
         assert "Unsupported database engine" in result.stderr
+
+
+class TestApiDocsInProduction:
+    def test_docs_disabled_by_default(self) -> None:
+        script = SCRIPT.replace(
+            "print(settings.DEBUG,", "print(settings.API_DOCS_ENABLED, settings.DEBUG,"
+        )
+        result = _run(script)
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split()[0] == "False"
+
+    def test_enabling_docs_is_refused(self) -> None:
+        result = _run(overrides={"DJANGO_API_DOCS_ENABLED": "true"})
+
+        assert result.returncode != 0
+        assert "DJANGO_API_DOCS_ENABLED must be false in production" in result.stderr
+
+
+class TestCorsInProduction:
+    def test_https_origins_accepted(self) -> None:
+        result = _run(overrides={"DJANGO_CORS_ALLOWED_ORIGINS": "https://app.example.org"})
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize("origin", ["http://app.example.org", "*"])
+    def test_insecure_origins_refused(self, origin: str) -> None:
+        result = _run(overrides={"DJANGO_CORS_ALLOWED_ORIGINS": origin})
+
+        assert result.returncode != 0
+        assert "ImproperlyConfigured" in result.stderr
+
+
+def test_production_log_format_defaults_to_json() -> None:
+    script = (
+        "import django\nfrom django.conf import settings\ndjango.setup()\n"
+        "print(settings.LOG_FORMAT)\n"
+    )
+    result = _run(script)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "json"

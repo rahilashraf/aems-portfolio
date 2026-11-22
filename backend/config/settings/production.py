@@ -4,13 +4,23 @@ No deployment is performed in Phase 1; this module exists so the production imag
 and checked (``manage.py check --deploy``) in CI.
 """
 
+from django.core.exceptions import ImproperlyConfigured
+
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, DEBUG, SECRET_KEY, env
-from .validation import validate_production_settings
+from .base import ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, DEBUG, SECRET_KEY, env
+from .validation import validate_cors_origins, validate_production_settings
 
 # DEBUG comes from the environment (via base) and is validated, not silently overridden:
 # DJANGO_DEBUG=true must stop production startup rather than be ignored.
 validate_production_settings(secret_key=SECRET_KEY, debug=DEBUG, allowed_hosts=ALLOWED_HOSTS)
+validate_cors_origins(CORS_ALLOWED_ORIGINS, require_https=True)
+
+# API documentation stays disabled in production until staff authentication and authorization
+# exist. Asking for it is a configuration error rather than something to silently ignore.
+if env.bool("DJANGO_API_DOCS_ENABLED", default=False):
+    msg = "DJANGO_API_DOCS_ENABLED must be false in production."
+    raise ImproperlyConfigured(msg)
+API_DOCS_ENABLED = False
 
 # Opt-in only. Enable ONLY when every request reaches Django through a trusted TLS-terminating
 # reverse proxy that strips any client-supplied X-Forwarded-Proto header and overwrites it with
