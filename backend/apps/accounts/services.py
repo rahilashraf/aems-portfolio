@@ -4,12 +4,12 @@ Views stay thin; every rule (rate limits, backoff, enumeration resistance, sessi
 transactions, security events) lives here.
 """
 
+import smtplib
 from dataclasses import dataclass
 from typing import Any
 
 from django.conf import settings
 from django.contrib.auth import authenticate, password_validation
-from django.contrib.auth.hashers import make_password
 from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.db import transaction
@@ -173,11 +173,33 @@ def _validate_new_password(password: str, user: User | None) -> None:
 
 
 # --------------------------------------------------------------------------- password reset
+# Failures of the mail transport we expect in operation: SMTP protocol/auth/recipient errors and
+# network errors (refused, reset, DNS, timeouts — ``TimeoutError`` and ``socket.gaierror`` are
+# ``OSError`` subclasses).
+EXPECTED_MAIL_ERRORS: tuple[type[BaseException], ...] = (smtplib.SMTPException, OSError)
+
+
 def request_password_reset(*, email: str, client_ip: str | None) -> None:
     """Send a reset link if an active account exists. The caller always answers 202.
 
-    Rate limits apply per IP and per submitted address whether or not the account exists, so the
-    429 behaviour reveals nothing about existence either.
+    Enumeration resistance:
+
+    - Rate limits apply per IP and per submitted address whether or not the account exists, so 429
+      responses reveal nothing about existence.
+    - **Delivery failures never change the response.** Any exception raised while sending is
+      caught, so a known account whose email cannot be sent gets the same 202, body and headers as
+      an unknown one. The failure is reported as ``auth.password_reset.delivery_failed`` with
+      identifiers only: the user id, the subject digest and the exception *class*. The exception
+      message is deliberately not logged, because transport errors such as
+      ``SMTPRecipientsRefused`` embed the recipient address. The reset token is never logged.
+    - Acceptance does not guarantee delivery. The request is not retried; the user can request a
+      new link (within the rate limits).
+
+    Timing: this is **not** constant time. For a known account the request also generates a reset
+    token and waits for the mail transport (an SMTP round trip, bounded by ``EMAIL_TIMEOUT``),
+    which an unknown account does not, so response time can distinguish the two. Closing that
+    side channel requires moving delivery out of the request (an outbox/worker), which is out of
+    scope for Batch 3; the per-IP and per-address rate limits bound how fast it can be probed.
     """
     normalized = normalize_email(email)
     account_digest = ratelimit.digest("email", normalized)
@@ -194,8 +216,6 @@ def request_password_reset(*, email: str, client_ip: str | None) -> None:
     )
     user = User.objects.filter(email=normalized, is_active=True).first()
     if user is None or not user.has_usable_password():
-        # Comparable work for unknown accounts: one password hash.
-        make_password(None)
         record_security_event(
             "auth.password_reset.requested",
             outcome="success",
@@ -205,6 +225,32 @@ def request_password_reset(*, email: str, client_ip: str | None) -> None:
         )
         return
 
+    record_security_event(
+        "auth.password_reset.requested",
+        outcome="success",
+        user_id=user.pk,
+        client_ip=client_ip,
+        subject_digest=account_digest,
+        account_found=True,
+    )
+    try:
+        _send_password_reset_email(user)
+    except Exception as exc:
+        # Deliberately broad: *any* failure here would otherwise turn into a 500 for existing
+        # accounts only and reveal that the account exists. Unexpected errors are flagged so they
+        # stand out from routine transport failures.
+        record_security_event(
+            "auth.password_reset.delivery_failed",
+            outcome="failure",
+            user_id=user.pk,
+            client_ip=client_ip,
+            subject_digest=account_digest,
+            error_type=type(exc).__name__,
+            expected=isinstance(exc, EXPECTED_MAIL_ERRORS),
+        )
+
+
+def _send_password_reset_email(user: User) -> None:
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = password_reset_tokens.make_token(user)
     # The token travels in the URL fragment, which browsers never send to servers or in Referer.
@@ -221,14 +267,6 @@ def request_password_reset(*, email: str, client_ip: str | None) -> None:
         from_email=None,
         recipient_list=[user.email],
         fail_silently=False,
-    )
-    record_security_event(
-        "auth.password_reset.requested",
-        outcome="success",
-        user_id=user.pk,
-        client_ip=client_ip,
-        subject_digest=account_digest,
-        account_found=True,
     )
 
 

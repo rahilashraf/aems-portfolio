@@ -284,8 +284,11 @@ class PasswordChangeView(AemsAPIView):
         return response
 
 
+# Acceptance is not a delivery guarantee: the wording must hold when the account does not exist and
+# when sending fails (AEMS-010).
 GENERIC_RESET_DETAIL = (
-    "If an account exists for that email address, a password reset link has been sent."
+    "If an account exists for that email address, a password reset link will be sent to it. "
+    "If no email arrives, check the address and try again later."
 )
 
 
@@ -293,7 +296,10 @@ class PasswordResetRequestView(PublicAuthView):
     @extend_schema(
         operation_id="auth_password_reset_request",
         summary="Request a password reset email",
-        description="Always returns 202 with the same body, whether or not the account exists.",
+        description=(
+            "Always returns 202 with the same body and headers, whether or not the account exists "
+            "and whether or not the email could be sent. Acceptance does not guarantee delivery."
+        ),
         request=s.PasswordResetRequestSerializer,
         responses={202: s.DetailSerializer},
         tags=[TAG],
