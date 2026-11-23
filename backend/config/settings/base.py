@@ -43,6 +43,7 @@ THIRD_PARTY_APPS: list[str] = [
 LOCAL_APPS: list[str] = [
     "apps.core",
     "apps.accounts",
+    "apps.organizations",
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -203,6 +204,12 @@ SPECTACULAR_SETTINGS: dict[str, Any] = {
         "drf_spectacular.hooks.postprocess_schema_enums",
         "apps.core.api.openapi.add_problem_responses",
     ],
+    # Several models have a "status" field; name each enum explicitly.
+    "ENUM_NAME_OVERRIDES": {
+        "OrganizationStatusEnum": "apps.organizations.models.OrganizationStatus",
+        "MembershipStatusEnum": "apps.organizations.models.MembershipStatus",
+        "OrganizationTypeEnum": "apps.organizations.models.OrganizationType",
+    },
 }
 
 # --------------------------------------------------------------------------- identity & auth

@@ -429,6 +429,44 @@ jobs:
           test "$(messages)" = 1
           echo "Delivered exactly once; the link was single-use"
 
+      - name: Organization administration and tenant isolation against the production container
+        run: |
+          base=http://127.0.0.1:8000
+          hdr=(-H "Host: $API_HOST" -H "X-Forwarded-Proto: https" -H "Content-Type: application/json")
+          password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          docker exec -e DJANGO_SUPERUSER_PASSWORD="$password" -e DJANGO_SUPERUSER_FULL_NAME="Platform E2E" \
+            aems-api python manage.py createsuperuser --noinput --email platform-e2e@example.org > /dev/null
+          token="$(curl -fsS "${hdr[@]}" -d "{\"email\": \"platform-e2e@example.org\", \"password\": \"$password\"}" \
+            "$base/api/v1/auth/login/" | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
+          auth=(-H "Authorization: Bearer $token")
+          call() {  # call <expected status> <method> <path> [json body]: response saved to /tmp/org.json
+            local want="$1" method="$2" path="$3" body="${4:-}" got
+            got="$(curl -sS -o /tmp/org.json -w '%{http_code}' -X "$method" "${hdr[@]}" "${auth[@]}" \
+              ${body:+-d "$body"} "$base$path")"
+            echo "$method $path -> $got (expected $want)"
+            [ "$got" = "$want" ] || { cat /tmp/org.json; exit 1; }
+          }
+          field() { python3 -c "import json; print(json.load(open('/tmp/org.json'))$1)"; }
+
+          call 201 POST /api/v1/platform/organizations/ \
+            '{"name": "CI Academy", "slug": "CI-Academy", "organization_type": "school", "timezone": "Europe/London"}'
+          org_id="$(field '["id"]')"
+          test "$(field '["status"]')" = provisioning
+          test "$(field '["slug"]')" = ci-academy
+          call 409 PATCH "/api/v1/platform/organizations/$org_id/" '{"status": "active"}'
+          grep -q organization_status_transition_not_allowed /tmp/org.json
+          call 400 PATCH "/api/v1/platform/organizations/$org_id/" '{"slug": "renamed"}'
+          call 200 GET "/api/v1/platform/organizations/?status=provisioning"
+          test "$(field '["count"]')" = 1
+          # Platform administration grants no tenant access, and provisioning organizations are closed.
+          call 404 GET "/api/v1/organizations/$org_id/"
+          call 404 GET "/api/v1/organizations/$org_id/me/"
+          call 200 GET /api/v1/organizations/
+          test "$(field '["count"]')" = 0
+          auth=()
+          call 401 GET /api/v1/organizations/
+          call 401 GET "/api/v1/platform/organizations/"
+
       - name: Show container logs
         if: always()
         run: docker logs aems-api 2>&1 | tail -n 100 || true

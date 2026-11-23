@@ -665,8 +665,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 |---|---|---|---|
 | 1 — Repository scaffolding | Merged | rahilashraf/aems-portfolio#1 | Review findings AEMS-001…006 resolved before merge |
 | 2 — Core infrastructure & CI | Merged | rahilashraf/aems-portfolio#2 | Review findings AEMS-007…009 resolved before merge |
-| 3 — Accounts & authentication | In review | (this batch) | See Batch 3 deviations below |
-| 4–8 | Not started | — | — |
+| 3 — Accounts & authentication | Merged | rahilashraf/aems-portfolio#4 | Review findings AEMS-010/011 and the password-reset outbox resolved before merge |
+| 4 — Organizations & tenancy | In review | (this batch) | See Batch 4 deviations below |
+| 5–8 | Not started | — | — |
 
 ### Batch 2 deviations from the original plan
 
@@ -714,3 +715,25 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   `deliver_password_reset_emails` command delivers with `SKIP LOCKED` claims, leases, bounded
   retries and expiry. It must be scheduled externally; scheduling and deployment are deferred.
   This is not a general job queue (Redis/Celery stay out of scope).
+
+### Batch 4 deviations and clarifications (ADR-0015)
+
+- **No activation path.** `provisioning → active` (Batch 7 invitation acceptance) and
+  `suspended → active` (Owner check, Batches 6/7) are rejected with 409. Platform administrators
+  can only suspend active organizations. Tests use a documented test-only activation fixture.
+- **Authorization before RBAC.** `HasOrgPermission` exists with per-action declarations and
+  default deny. Membership authorizes only declared read-only actions, and permission evaluation
+  returns False until Batch 6. `PATCH /organizations/{org_id}/` is therefore routed but answers
+  403.
+- **Platform administrators** must be active staff **and** hold the Django model permission for
+  the method (`view`/`add`/`change_organization`). The plan said "staff"; the model permissions
+  make platform authority explicit and scoped.
+- **Bodies naming an organization are rejected** (400), rather than ignored.
+- **`/organizations/{org_id}/me/`** returns the membership only. Roles and effective permissions
+  are added in Batch 6.
+- **The organization slug is immutable** after creation.
+- **Admin** is read-only for organizations and memberships, so it cannot bypass the lifecycle.
+- **Test-only tenant resource** `tests.fixtures_app.TenantNote` exercises nested lookups and
+  writes in the isolation matrix before real tenant resources exist.
+- **Deferred:** members, roles and permissions (Batch 6); invitations (Batch 7); audit logs
+  (Batch 5); RLS (Phase 2).
