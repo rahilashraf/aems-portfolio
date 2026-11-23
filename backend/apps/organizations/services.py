@@ -10,14 +10,15 @@ Rules enforced here, not in views:
   every request.
 - ``id``, ``slug``, ``created_by`` and timestamps cannot be changed.
 
-Mutations lock the organization row and emit their security events only after commit.
+Mutations lock the organization row and write their audit records inside the same transaction
+(ADR-0016): the change and its record commit or roll back together.
 """
 
 from typing import Any
 
 from django.db import IntegrityError, transaction
 
-from apps.core.security_events import record_after_commit
+from apps.audit import services as audit
 
 from .exceptions import OrganizationSlugTakenError, OrganizationStatusTransitionError
 from .models import ORGANIZATION_SLUG_UNIQUE, Organization, OrganizationStatus
@@ -58,12 +59,14 @@ def create_organization(
     try:
         with transaction.atomic():
             organization.save(force_insert=True)
-            record_after_commit(
+            audit.record(
                 "organization.created",
-                user_id=actor.pk,
+                actor=actor,
+                organization=organization,
+                target_type="organization",
+                target_id=organization.pk,
                 client_ip=client_ip,
-                organization_id=str(organization.pk),
-                status=organization.status,
+                metadata={"status": organization.status},
             )
     except IntegrityError as exc:
         if _is_slug_violation(exc):
@@ -74,14 +77,19 @@ def create_organization(
 
 def _apply_changes(
     organization: Organization, changes: dict[str, Any], allowed: frozenset[str]
-) -> list[str]:
+) -> dict[str, tuple[Any, Any]]:
+    """Apply allowed changes; return ``{field: (before, after)}`` for the fields that changed."""
     unexpected = set(changes) - allowed
     if unexpected:
         msg = f"Fields not editable here: {', '.join(sorted(unexpected))}"
         raise ValueError(msg)
-    changed = [field for field, value in changes.items() if getattr(organization, field) != value]
-    for field in changed:
-        setattr(organization, field, changes[field])
+    changed = {
+        field: (getattr(organization, field), value)
+        for field, value in changes.items()
+        if getattr(organization, field) != value
+    }
+    for field, (_before, after) in changed.items():
+        setattr(organization, field, after)
     return changed
 
 
@@ -98,23 +106,26 @@ def update_organization(
         ):
             raise OrganizationStatusTransitionError()
         changed = _apply_changes(locked, changes, PLATFORM_EDITABLE_FIELDS)
-        _save(locked, changed)
+        _save(locked, list(changed))
         if changed:
-            record_after_commit(
+            audit.record(
                 "organization.updated",
-                user_id=actor.pk,
+                actor=actor,
+                organization=locked,
+                target_type="organization",
+                target_id=locked.pk,
+                changes=changed,
                 client_ip=client_ip,
-                organization_id=str(locked.pk),
-                changed_fields=sorted(changed),
             )
         if "status" in changed:
-            record_after_commit(
+            audit.record(
                 "organization.status_changed",
-                user_id=actor.pk,
+                actor=actor,
+                organization=locked,
+                target_type="organization",
+                target_id=locked.pk,
                 client_ip=client_ip,
-                organization_id=str(locked.pk),
-                previous_status=previous_status,
-                status=locked.status,
+                metadata={"previous_status": previous_status, "status": locked.status},
             )
     return locked
 
@@ -132,14 +143,16 @@ def update_organization_profile(
         if locked.status != OrganizationStatus.ACTIVE:
             raise OrganizationStatusTransitionError()
         changed = _apply_changes(locked, changes, TENANT_EDITABLE_FIELDS)
-        _save(locked, changed)
+        _save(locked, list(changed))
         if changed:
-            record_after_commit(
+            audit.record(
                 "organization.profile_updated",
-                user_id=actor.pk,
+                actor=actor,
+                organization=locked,
+                target_type="organization",
+                target_id=locked.pk,
+                changes=changed,
                 client_ip=client_ip,
-                organization_id=str(locked.pk),
-                changed_fields=sorted(changed),
             )
     return locked
 

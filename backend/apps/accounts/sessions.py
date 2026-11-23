@@ -25,7 +25,8 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.core.security_events import record_after_commit, record_security_event
+from apps.audit import services as audit
+from apps.core.security_events import log_security_event
 
 from .models import AuthSession, RevokeReason, User
 from .tokens import (
@@ -104,6 +105,9 @@ def rotate(raw_refresh_token: str, *, client_ip: str | None = None) -> RotationR
     try:
         claims = decode_refresh_token(raw_refresh_token)
     except InvalidTokenError:
+        audit.record_security_event(
+            "auth.refresh.rejected", client_ip=client_ip, metadata={"reason": "invalid_token"}
+        )
         return RotationResult(RotationOutcome.INVALID)
 
     now = timezone.now()
@@ -120,6 +124,16 @@ def rotate(raw_refresh_token: str, *, client_ip: str | None = None) -> RotationR
             session.revoked_at = now
             session.revoke_reason = RevokeReason.REFRESH_REUSE
             session.save(update_fields=["revoked_at", "revoke_reason"])
+            # Same transaction as the revocation: both commit together (nothing raises here).
+            audit.record(
+                "auth.refresh.reuse_detected",
+                outcome="failure",
+                actor=session.user,
+                target_type="session",
+                target_id=session.id,
+                client_ip=client_ip,
+                metadata={"session_id": session.id, "reason": RevokeReason.REFRESH_REUSE},
+            )
             result = RotationResult(
                 RotationOutcome.REUSE_DETECTED,
                 session_id=str(session.id),
@@ -134,24 +148,18 @@ def rotate(raw_refresh_token: str, *, client_ip: str | None = None) -> RotationR
                 session_id=str(session.id),
                 user_id=str(session.user_id),
             )
-    # The transaction has committed: the revocation (if any) is durable before anything is reported.
-    if result.outcome is RotationOutcome.REUSE_DETECTED:
-        record_security_event(
-            "auth.refresh.reuse_detected",
-            outcome="failure",
-            user_id=result.user_id,
-            session_id=result.session_id,
-            client_ip=client_ip,
-        )
-    elif result.outcome is RotationOutcome.INVALID:
-        record_security_event(
+    # The transaction has committed: a replay revocation and its audit record are durable before
+    # the caller reports anything.
+    if result.outcome is RotationOutcome.INVALID:
+        audit.record_security_event(
             "auth.refresh.rejected",
-            outcome="failure",
-            session_id=result.session_id,
             client_ip=client_ip,
+            metadata={"session_id": result.session_id, "reason": "session_unusable"},
         )
-    else:
-        record_security_event(
+    elif result.outcome is RotationOutcome.ROTATED:
+        # Operational log only: rotation happens every few minutes per session and changes no
+        # account state, so it is not an audit record (ADR-0016).
+        log_security_event(
             "auth.refresh.rotated",
             outcome="success",
             user_id=result.user_id,
@@ -204,47 +212,67 @@ def session_for_refresh_token(raw: str, *, client_ip: str | None = None) -> Auth
         return None
     session = AuthSession.objects.filter(id=claims.session_id, user_id=claims.user_id).first()
     if session is None and AuthSession.objects.filter(id=claims.session_id).exists():
-        record_security_event(
+        audit.record_security_event(
             "auth.session.owner_mismatch",
-            outcome="failure",
-            session_id=claims.session_id,
+            target_type="session",
+            target_id=claims.session_id,
             client_ip=client_ip,
-            token_user_id=claims.user_id,
+            metadata={"session_id": claims.session_id, "token_user_id": claims.user_id},
         )
     return session
 
 
-def revoke_session(session: AuthSession, reason: str, *, client_ip: str | None = None) -> bool:
-    """Revoke one session (idempotent). Returns True if it was active."""
+def revoke_session(
+    session: AuthSession,
+    reason: str,
+    *,
+    client_ip: str | None = None,
+    actor: User | None = None,
+) -> bool:
+    """Revoke one session (idempotent). Returns True if it was active.
+
+    ``actor`` defaults to the session's owner (logout, own-session revocation); pass the
+    administrator when one revokes someone else's session.
+    """
     with transaction.atomic():
         updated = AuthSession.objects.filter(id=session.id, revoked_at__isnull=True).update(
             revoked_at=timezone.now(), revoke_reason=reason
         )
         if updated:
-            record_after_commit(
+            audit.record(
                 "auth.session.revoked",
-                user_id=session.user_id,
-                session_id=session.id,
+                actor=actor or session.user,
+                target_type="session",
+                target_id=session.id,
                 client_ip=client_ip,
-                reason=reason,
+                metadata={"session_id": session.id, "reason": reason},
             )
     return bool(updated)
 
 
 def revoke_user_sessions(
-    user: User | Any, reason: str, *, except_session_id: Any = None, client_ip: str | None = None
+    user: User,
+    reason: str,
+    *,
+    except_session_id: Any = None,
+    client_ip: str | None = None,
+    actor: User | None = None,
 ) -> int:
-    """Revoke every active session of a user (optionally keeping one). Use inside a transaction."""
+    """Revoke every active session of a user (optionally keeping one).
+
+    Must run inside the caller's transaction: the revocation and its audit record commit together.
+    """
     queryset = AuthSession.objects.filter(user_id=user.pk, revoked_at__isnull=True)
     if except_session_id is not None:
         queryset = queryset.exclude(id=except_session_id)
     count = queryset.update(revoked_at=timezone.now(), revoke_reason=reason)
     if count:
-        record_after_commit(
+        audit.record(
             "auth.sessions.revoked",
-            user_id=user.pk,
+            actor=actor,
+            target_type="user",
+            target_id=user.pk,
             client_ip=client_ip,
-            reason=reason,
-            count=count,
+            metadata={"reason": reason, "count": count},
         )
     return count

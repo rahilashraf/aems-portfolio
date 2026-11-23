@@ -15,8 +15,8 @@ from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import exceptions
 
+from apps.audit import services as audit
 from apps.core.api.exceptions import DomainError
-from apps.core.security_events import record_after_commit, record_security_event
 
 from . import ratelimit
 from .models import AuthSession, RevokeReason, User
@@ -43,9 +43,21 @@ class InvalidResetTokenError(DomainError):
     default_code = "invalid_reset_token"
 
 
-def _raise_if_limited(result: ratelimit.RateLimitResult | None, **event: Any) -> None:
+def _raise_if_limited(
+    result: ratelimit.RateLimitResult | None,
+    *,
+    scope: str,
+    client_ip: str | None = None,
+    subject_digest: str | None = None,
+    actor: User | None = None,
+) -> None:
     if result is not None:
-        record_security_event("auth.rate_limited", outcome="failure", **event)
+        audit.record_security_event(
+            "auth.rate_limited",
+            actor=actor,
+            client_ip=client_ip,
+            metadata={"scope": scope, "subject_digest": subject_digest},
+        )
         raise RateLimitedError(wait=result.retry_after)
 
 
@@ -85,11 +97,8 @@ def login(
     )
     locked_for = ratelimit.backoff_remaining(account_digest)
     if locked_for:
-        record_security_event(
-            "auth.login.locked",
-            outcome="failure",
-            client_ip=client_ip,
-            subject_digest=account_digest,
+        audit.record_security_event(
+            "auth.login.locked", client_ip=client_ip, metadata={"subject_digest": account_digest}
         )
         raise RateLimitedError(wait=locked_for)
 
@@ -98,12 +107,10 @@ def login(
     user = authenticate(request, email=normalized, password=password)
     if not isinstance(user, User):
         lock_seconds = ratelimit.register_failure(account_digest)
-        record_security_event(
+        audit.record_security_event(
             "auth.login.failed",
-            outcome="failure",
             client_ip=client_ip,
-            subject_digest=account_digest,
-            locked_for_seconds=lock_seconds,
+            metadata={"subject_digest": account_digest, "locked_for_seconds": lock_seconds},
         )
         raise InvalidCredentialsError()
 
@@ -111,11 +118,13 @@ def login(
     with transaction.atomic():
         tokens = create_session(user, client_ip=client_ip, user_agent=user_agent)
         User.objects.filter(pk=user.pk).update(last_login=timezone.now())
-        record_after_commit(
+        audit.record(
             "auth.login.succeeded",
-            user_id=user.pk,
-            session_id=tokens.session.id,
+            actor=user,
+            target_type="session",
+            target_id=tokens.session.id,
             client_ip=client_ip,
+            metadata={"session_id": tokens.session.id},
         )
     return LoginResult(user=user, tokens=tokens)
 
@@ -134,12 +143,16 @@ def change_password(
     _raise_if_limited(
         ratelimit.check_all([("password_change_user", ratelimit.digest("user", str(user.pk)))]),
         scope="password_change",
-        user_id=user.pk,
+        actor=user,
         client_ip=client_ip,
     )
     if not user.check_password(current_password):
-        record_security_event(
-            "auth.password_change.failed", outcome="failure", user_id=user.pk, client_ip=client_ip
+        audit.record_security_event(
+            "auth.password_change.failed",
+            actor=user,
+            target_type="user",
+            target_id=user.pk,
+            client_ip=client_ip,
         )
         raise exceptions.ValidationError(
             {"current_password": ["The current password is incorrect."]}
@@ -151,14 +164,18 @@ def change_password(
         locked.set_password(new_password)
         locked.password_changed_at = timezone.now()
         locked.save(update_fields=["password", "password_changed_at"])
-        revoke_user_sessions(locked, RevokeReason.PASSWORD_CHANGED, client_ip=client_ip)
+        revoke_user_sessions(
+            locked, RevokeReason.PASSWORD_CHANGED, client_ip=client_ip, actor=locked
+        )
         tokens = create_session(locked, client_ip=client_ip, user_agent=user_agent)
-        record_after_commit(
+        audit.record(
             "auth.password.changed",
-            user_id=locked.pk,
-            session_id=tokens.session.id,
+            actor=locked,
+            target_type="user",
+            target_id=locked.pk,
+            changes={"password": (None, None)},
             client_ip=client_ip,
-            previous_session_id=current_session.id,
+            metadata={"session_id": tokens.session.id, "previous_session_id": current_session.id},
         )
     return tokens
 
@@ -206,23 +223,21 @@ def request_password_reset(*, email: str, client_ip: str | None) -> None:
     try:
         with transaction.atomic():
             user_id = enqueue_password_reset(normalized)
+            # Same transaction as the enqueue: no queued email without its audit record.
+            audit.record(
+                "auth.password_reset.requested",
+                target_type="user" if user_id else "",
+                target_id=user_id or "",
+                client_ip=client_ip,
+                metadata={"subject_digest": account_digest, "queued": user_id is not None},
+            )
     except DatabaseError as exc:
-        record_security_event(
+        # The transaction has rolled back; record the failure in its own transaction.
+        audit.record_security_event(
             "auth.password_reset.enqueue_failed",
-            outcome="failure",
             client_ip=client_ip,
-            subject_digest=account_digest,
-            error_type=type(exc).__name__,
+            metadata={"subject_digest": account_digest, "error_type": type(exc).__name__},
         )
-        return
-    record_security_event(
-        "auth.password_reset.requested",
-        outcome="success",
-        user_id=user_id,
-        client_ip=client_ip,
-        subject_digest=account_digest,
-        queued=user_id is not None,
-    )
 
 
 def confirm_password_reset(
@@ -237,7 +252,7 @@ def confirm_password_reset(
     )
     user = _user_from_uid(uid)
     if user is None or not user.is_active or not password_reset_tokens.check_token(user, token):
-        record_security_event("auth.password_reset.failed", outcome="failure", client_ip=client_ip)
+        audit.record_security_event("auth.password_reset.failed", client_ip=client_ip)
         raise InvalidResetTokenError()
     _validate_new_password(new_password, user)
 
@@ -248,8 +263,15 @@ def confirm_password_reset(
         locked.set_password(new_password)
         locked.password_changed_at = timezone.now()
         locked.save(update_fields=["password", "password_changed_at"])
-        revoke_user_sessions(locked, RevokeReason.PASSWORD_RESET, client_ip=client_ip)
-        record_after_commit("auth.password_reset.completed", user_id=locked.pk, client_ip=client_ip)
+        revoke_user_sessions(locked, RevokeReason.PASSWORD_RESET, client_ip=client_ip, actor=locked)
+        audit.record(
+            "auth.password_reset.completed",
+            actor=locked,
+            target_type="user",
+            target_id=locked.pk,
+            changes={"password": (None, None)},
+            client_ip=client_ip,
+        )
     ratelimit.reset_failures(ratelimit.digest("email", locked.email))
 
 
@@ -272,14 +294,17 @@ def deactivate_user(user: User, *, actor: User | None = None) -> int:
     """
     with transaction.atomic():
         locked = User.objects.select_for_update().get(pk=user.pk)
-        if locked.is_active:
+        was_active = locked.is_active
+        if was_active:
             locked.is_active = False
             locked.save(update_fields=["is_active"])
-        revoked = revoke_user_sessions(locked, RevokeReason.DEACTIVATED)
-        record_after_commit(
+        revoked = revoke_user_sessions(locked, RevokeReason.DEACTIVATED, actor=actor)
+        audit.record(
             "auth.account.deactivated",
-            user_id=locked.pk,
-            actor_id=getattr(actor, "pk", None),
-            sessions_revoked=revoked,
+            actor=actor,
+            target_type="user",
+            target_id=locked.pk,
+            changes={"is_active": (True, False)} if was_active else None,
+            metadata={"sessions_revoked": revoked},
         )
     return revoked

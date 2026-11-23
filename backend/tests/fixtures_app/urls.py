@@ -45,6 +45,11 @@ urlpatterns = [
         name="test-tenant-notes",
     ),
     path(
+        "test-api/organizations/<uuid:org_id>/audit-logs/",
+        tenant_views.TestOnlyAuditLogView.as_view(),
+        name="test-tenant-audit-logs",
+    ),
+    path(
         "test-api/organizations/<uuid:org_id>/notes/<str:note_id>/",
         tenant_views.TenantNoteDetailView.as_view(),
         name="test-tenant-note",

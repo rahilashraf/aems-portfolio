@@ -35,11 +35,11 @@ from apps.accounts.sessions import (
     session_for_refresh_token,
 )
 from apps.accounts.tokens import InvalidTokenError
+from apps.audit import services as audit
 from apps.core.api.openapi import PROBLEM_401_EXTENSION
 from apps.core.api.permissions import PublicEndpoint
 from apps.core.api.views import AemsAPIView, AemsGenericAPIView
 from apps.core.net import client_ip
-from apps.core.security_events import record_security_event
 
 from . import serializers as s
 
@@ -228,13 +228,18 @@ class LogoutView(PublicAuthView):
         revoked = False
         if session is not None:
             revoked = revoke_session(session, RevokeReason.LOGOUT, client_ip=ip)
-        record_security_event(
+        # Independent event: the revocation (if any) was recorded with its own transaction.
+        audit.record_security_event(
             "auth.logout",
             outcome="success",
-            user_id=session.user_id if session is not None else None,
-            session_id=session.id if session is not None else None,
+            actor=session.user if session is not None else None,
+            target_type="session" if session is not None else "",
+            target_id=session.id if session is not None else "",
             client_ip=ip,
-            revoked=revoked,
+            metadata={
+                "session_id": session.id if session is not None else None,
+                "revoked": revoked,
+            },
         )
         response = Response(status=status.HTTP_204_NO_CONTENT)
         clear_refresh_cookie(response)
@@ -417,5 +422,6 @@ class RevokeOtherSessionsView(AemsAPIView):
                 RevokeReason.OTHER_SESSIONS_REVOKED,
                 except_session_id=context.session.id,
                 client_ip=client_ip(request),
+                actor=context.user,
             )
         return Response({"revoked": revoked})

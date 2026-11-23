@@ -36,6 +36,7 @@ from apps.accounts.outbox import (
     purge_finished,
 )
 from apps.accounts.tokens import password_reset_tokens
+from apps.audit.models import AuditLog
 
 from . import failing_mail
 from .conftest import PASSWORD, event_names
@@ -146,7 +147,8 @@ class TestEnumerationResistance:
         assert known.status_code == unknown.status_code == 202
         assert known.content == unknown.content
         assert _headers(known) == _headers(unknown)
-        assert event_names(events) == ["auth.password_reset.requested"] * 2
+        actions = list(AuditLog.objects.order_by("created_at").values_list("action", flat=True))
+        assert actions == ["auth.password_reset.requested"] * 2
 
     @pytest.mark.parametrize("pending_already", [False, True])
     def test_known_and_unknown_addresses_run_the_same_queries(
@@ -208,20 +210,27 @@ class TestEnumerationResistance:
         assert response.content == baseline.content
         assert _headers(response) == _headers(baseline)
         [failure] = [e for e in events if e.name == "auth.password_reset.enqueue_failed"]
-        assert failure.metadata == {"error_type": "DatabaseError"}
+        assert failure.metadata["error_type"] == "DatabaseError"
         assert user.email not in repr(failure)
+        row = AuditLog.objects.get(action="auth.password_reset.enqueue_failed")
+        assert row.outcome == "failure"
+        assert row.metadata["error_type"] == "DatabaseError"
+        assert user.email not in repr(row.__dict__)
 
-    def test_request_event_is_sanitized(self, user: User, events: Any) -> None:
+    def test_request_event_is_sanitized(self, user: User) -> None:
         _request(user.email)
         _request("nobody@example.org")
-        known, unknown = events
-        assert known.metadata == {"queued": True}
-        assert known.user_id == str(user.pk)
-        assert unknown.metadata == {"queued": False}
-        assert unknown.user_id is None
-        assert known.subject_digest != unknown.subject_digest
-        for event in events:
-            assert "@" not in repr(event)
+        known, unknown = AuditLog.objects.filter(action="auth.password_reset.requested").order_by(
+            "created_at"
+        )
+        assert known.metadata["queued"] is True
+        assert (known.target_type, known.target_id) == ("user", str(user.pk))
+        assert unknown.metadata["queued"] is False
+        assert unknown.target_id == ""
+        assert known.actor_id is None  # the requester is anonymous
+        assert known.metadata["subject_digest"] != unknown.metadata["subject_digest"]
+        for row in (known, unknown):
+            assert "@" not in repr(row.__dict__)
 
     def test_literal_sql_table_names_match_models(self) -> None:
         assert PasswordResetOutbox._meta.db_table == outbox.OUTBOX_TABLE
@@ -273,7 +282,8 @@ class TestDelivery:
         row = _pending(user)
         assert row.last_failure == FailureCategory.CONNECTION
         assert row.next_attempt_at == now() + timedelta(seconds=60)
-        [failure] = [e for e in events if e.name == "auth.password_reset.delivery_failed"]
+        failure = AuditLog.objects.get(action="auth.password_reset.delivery_failed")
+        assert failure.outcome == "failure"
         assert failure.metadata["category"] == "connection"
         assert failure.metadata["retry_scheduled"] is True
 
@@ -347,7 +357,7 @@ class TestDelivery:
         assert report.claimed == 0
         assert mail.outbox == []
         assert PasswordResetOutbox.objects.get(user=user).status == Status.EXPIRED
-        assert "auth.password_reset.delivery_expired" in event_names(events)
+        assert AuditLog.objects.filter(action="auth.password_reset.delivery_expired").exists()
 
     def test_request_superseded_by_a_password_change_is_cancelled(self, user: User) -> None:
         _request(user.email)
@@ -466,18 +476,24 @@ class TestDelivery:
         assert set(PasswordResetOutbox.objects.values_list("pk", flat=True)) == {r.pk for r in kept}
 
     def test_logs_and_events_never_contain_the_address_or_token(
-        self, user: User, events: Any, caplog: pytest.LogCaptureFixture
+        self,
+        user: User,
+        events: Any,
+        caplog: pytest.LogCaptureFixture,
+        django_capture_on_commit_callbacks: Any,
     ) -> None:
-        _request(user.email)
-        with override_settings(
-            EMAIL_BACKEND="apps.accounts.tests.failing_mail.RecipientsRefusedBackend"
-        ):
-            deliver_due(batch_size=10)  # failure path: the exception names the recipient
-        _request(user.email)
-        deliver_due(batch_size=10)
+        with django_capture_on_commit_callbacks(execute=True):
+            _request(user.email)
+            with override_settings(
+                EMAIL_BACKEND="apps.accounts.tests.failing_mail.RecipientsRefusedBackend"
+            ):
+                deliver_due(batch_size=10)  # failure path: the exception names the recipient
+            _request(user.email)
+            deliver_due(batch_size=10)
         [(uid, token)] = _links([str(mail.outbox[0].body)])
 
-        rendered = caplog.text + "".join(repr(e) for e in events)
+        rows = repr(list(AuditLog.objects.values()))
+        rendered = caplog.text + "".join(repr(e) for e in events) + rows
         assert "auth.password_reset.delivery_failed" in rendered
         assert "auth.password_reset.email_delivered" in rendered
         for secret in (user.email, token, f"uid={uid}", "mailbox unavailable"):

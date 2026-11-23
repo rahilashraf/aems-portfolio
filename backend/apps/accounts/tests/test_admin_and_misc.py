@@ -217,16 +217,20 @@ class TestSecurityEvents:
         with django_capture_on_commit_callbacks(execute=True):
             try:
                 with transaction.atomic():
-                    security_events.record_after_commit("test.rolled_back", user_id="u1")
+                    security_events.emit_after_commit(
+                        security_events.build_event("test.rolled_back", "success", user_id="u1")
+                    )
                     raise RuntimeError
             except RuntimeError:
                 pass
             with transaction.atomic():
-                security_events.record_after_commit("test.committed", user_id="u2")
+                security_events.emit_after_commit(
+                    security_events.build_event("test.committed", "success", user_id="u2")
+                )
         assert [e.name for e in events] == ["test.committed"]
 
     def test_log_sink_renders_structured_event(self, json_logs: Any) -> None:
-        security_events.record_security_event(
+        security_events.log_security_event(
             "test.failure",
             outcome="failure",
             user_id="u1",
@@ -238,6 +242,19 @@ class TestSecurityEvents:
         assert record["level"] == "warning"
         assert record["logger"] == "aems.security"
         assert "hunter2" not in json_logs.text
+
+    def test_failing_sink_never_breaks_the_caller(self, json_logs: Any) -> None:
+        def broken(_event: Any) -> None:
+            raise RuntimeError("sink down")
+
+        unregister = security_events.register_sink(broken)
+        try:
+            security_events.log_security_event("test.sink_failure", outcome="success")
+        finally:
+            unregister()
+        [record] = json_logs.events("security.sink_failed")
+        assert record["event_name"] == "test.sink_failure"
+        assert record["error_type"] == "RuntimeError"
 
 
 class TestClientIp:

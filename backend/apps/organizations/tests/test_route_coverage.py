@@ -50,10 +50,12 @@ def test_inventory_is_complete() -> None:
     assert {r[0] for r in TENANT_ROUTES} == {
         "api/v1/organizations/<uuid:org_id>/",
         "api/v1/organizations/<uuid:org_id>/me/",
+        "api/v1/organizations/<uuid:org_id>/audit-logs/",
     }
     assert {r[0] for r in PLATFORM_ROUTES} == {
         "api/v1/platform/organizations/",
         "api/v1/platform/organizations/<uuid:organization_id>/",
+        "api/v1/platform/audit-logs/",
     }
 
 
@@ -96,13 +98,21 @@ def test_tenant_routes_use_the_approved_infrastructure(
 def test_platform_routes_require_platform_administrators(
     route: str, name: str | None, view: type[APIView]
 ) -> None:
-    assert list(view.permission_classes) == [IsPlatformAdministrator], route
+    # Exactly one permission class: IsPlatformAdministrator or a subclass that only changes the
+    # model permission required per method (e.g. IsPlatformAuditor).
+    [permission] = view.permission_classes
+    assert isinstance(permission, type), route
+    assert issubclass(permission, IsPlatformAdministrator), route
     assert not issubclass(view, OrganizationScopedViewMixin), route
 
 
 def test_no_organization_route_is_public() -> None:
     public = set(settings.API_PUBLIC_ENDPOINTS)
     names = {name for name, _ in iter_url_patterns(get_resolver().url_patterns) if name}
-    organization_names = {n for n in names if ":organizations:" in n or ":platform:" in n}
+    organization_names = {
+        n
+        for n in names
+        if any(f":{ns}:" in n for ns in ("organizations", "platform", "platform-audit"))
+    }
     assert organization_names
     assert not organization_names & public

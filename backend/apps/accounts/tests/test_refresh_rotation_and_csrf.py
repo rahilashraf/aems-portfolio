@@ -17,6 +17,7 @@ from apps.accounts.sessions import (
     session_for_refresh_token,
 )
 from apps.accounts.tokens import issue_refresh_token
+from apps.audit.models import AuditLog
 
 from .conftest import (
     CSRF_URL,
@@ -318,10 +319,14 @@ class TestLogoutTokenBinding:
         [mismatch] = [e for e in events if e.name == "auth.session.owner_mismatch"]
         assert mismatch.outcome == "failure"
         assert mismatch.session_id == str(bobs_session.pk)
-        assert mismatch.metadata == {"token_user_id": str(alice.pk)}
+        assert mismatch.metadata["token_user_id"] == str(alice.pk)
+        row = AuditLog.objects.get(action="auth.session.owner_mismatch")
+        assert (row.target_type, row.target_id) == ("session", str(bobs_session.pk))
+        assert row.metadata["token_user_id"] == str(alice.pk)
         [logout] = [e for e in events if e.name == "auth.logout"]
         assert logout.session_id is None
-        assert logout.metadata == {"revoked": False}
+        assert logout.metadata["revoked"] is False
+        assert AuditLog.objects.get(action="auth.logout").metadata == {"revoked": False}
 
     def test_mismatched_cookie_does_not_block_the_callers_bearer_logout(
         self, make_user: Any

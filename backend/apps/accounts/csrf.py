@@ -13,8 +13,8 @@ from typing import Any
 from django.http import HttpRequest, HttpResponse
 from rest_framework.authentication import CSRFCheck
 
+from apps.audit import services as audit
 from apps.core.api.exceptions import DomainError
-from apps.core.security_events import record_security_event
 
 
 class CsrfFailedError(DomainError):
@@ -33,5 +33,5 @@ def enforce_csrf(request: Any) -> None:
     check.process_request(django_request)
     reason = check.process_view(django_request, _noop, (), {})
     if reason:
-        record_security_event("auth.csrf.failed", outcome="failure", reason=str(reason))
+        audit.record_security_event("auth.csrf.failed", metadata={"reason": str(reason)})
         raise CsrfFailedError()

@@ -44,6 +44,7 @@ LOCAL_APPS: list[str] = [
     "apps.core",
     "apps.accounts",
     "apps.organizations",
+    "apps.audit",
 ]
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -94,6 +95,10 @@ validate_database_engine(DATABASES["default"].get("ENGINE", ""))
 DATABASES["default"]["ATOMIC_REQUESTS"] = False  # explicit transactions in services (ADR-0006)
 DATABASES["default"]["CONN_MAX_AGE"] = env.int("DATABASE_CONN_MAX_AGE", default=60)
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+# The runtime role the application connects as in production (ADR-0016). Migrations run as the
+# owner role; after every migrate this role is granted its privileges (audit table: SELECT and
+# INSERT only). Unset: no grants are issued (single-role setups have no audit privilege boundary).
+DATABASE_RUNTIME_ROLE: str | None = env.str("DJANGO_DB_RUNTIME_ROLE", default="") or None
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

@@ -10,6 +10,7 @@
   deliberately no other deactivation path.
 """
 
+from contextvars import ContextVar
 from typing import Any
 
 from django import forms
@@ -24,8 +25,8 @@ from django.db.models import QuerySet
 from django.http import HttpRequest
 from django.utils import timezone
 
+from apps.audit import services as audit
 from apps.core.net import client_ip
-from apps.core.security_events import record_after_commit, record_security_event
 
 from . import ratelimit
 from .models import AuthSession, RevokeReason, User
@@ -54,27 +55,21 @@ class RateLimitedAdminAuthenticationForm(AdminAuthenticationForm):
             ]
         )
         if limited is not None or ratelimit.backoff_remaining(account):
-            record_security_event(
-                "auth.admin_login.rate_limited",
-                outcome="failure",
-                client_ip=ip,
-                subject_digest=account,
+            audit.record_security_event(
+                "auth.admin_login.rate_limited", client_ip=ip, metadata={"subject_digest": account}
             )
             raise ValidationError(self.error_messages["rate_limited"], code="rate_limited")
         try:
             cleaned = super().clean()
         except ValidationError:
             ratelimit.register_failure(account)
-            record_security_event(
-                "auth.admin_login.failed", outcome="failure", client_ip=ip, subject_digest=account
+            audit.record_security_event(
+                "auth.admin_login.failed", client_ip=ip, metadata={"subject_digest": account}
             )
             raise
         ratelimit.reset_failures(account)
-        record_security_event(
-            "auth.admin_login.succeeded",
-            outcome="success",
-            user_id=self.get_user().pk,
-            client_ip=ip,
+        audit.record_security_event(
+            "auth.admin_login.succeeded", outcome="success", actor=self.get_user(), client_ip=ip
         )
         return cleaned
 
@@ -135,14 +130,30 @@ class UserChangeForm(forms.ModelForm):  # type: ignore[type-arg]
         return email
 
 
+# The administrator performing the current admin password change. Django builds the password form
+# without the request, so UserAdmin.user_change_password sets this around the view.
+_admin_actor: ContextVar[User | None] = ContextVar("aems_admin_actor", default=None)
+
+# User fields whose changes through the admin are audited (values are not secret).
+AUDITED_ACCOUNT_FIELDS = ("full_name", "is_active", "is_staff", "is_superuser")
+AUDITED_ACCOUNT_RELATIONS = ("groups", "user_permissions")
+
+
 class SessionRevokingPasswordChangeForm(AdminPasswordChangeForm):  # type: ignore[type-arg]
     def save(self, commit: bool = True) -> Any:
+        actor = _admin_actor.get()
         with transaction.atomic():
             user = super().save(commit=False)
             user.password_changed_at = timezone.now()
             user.save()
-            revoke_user_sessions(user, RevokeReason.PASSWORD_CHANGED)
-            record_after_commit("auth.password.changed_by_admin", user_id=user.pk)
+            revoke_user_sessions(user, RevokeReason.PASSWORD_CHANGED, actor=actor)
+            audit.record(
+                "auth.password.changed_by_admin",
+                actor=actor,
+                target_type="user",
+                target_id=user.pk,
+                changes={"password": (None, None)},
+            )
         return user
 
 
@@ -173,16 +184,53 @@ class UserAdmin(DjangoUserAdmin):  # type: ignore[type-arg]
             fields += PRIVILEGED_FIELDS
         return fields
 
+    def user_change_password(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+        token = _admin_actor.set(request.user if isinstance(request.user, User) else None)
+        try:
+            return super().user_change_password(request, *args, **kwargs)
+        finally:
+            _admin_actor.reset(token)
+
     def save_model(self, request: HttpRequest, obj: User, form: Any, change: bool) -> None:
+        """Runs inside the admin's transaction, so the audit records commit with the change."""
+        actor = request.user if isinstance(request.user, User) else None
         deactivating = change and "is_active" in form.changed_data and not obj.is_active
         if deactivating:
             obj.is_active = True  # deactivate through the service (locks, revokes sessions)
         super().save_model(request, obj, form, change)
+        if not change:
+            audit.record("auth.account.created", actor=actor, target_type="user", target_id=obj.pk)
+        else:
+            changes = {
+                name: (form.initial.get(name), form.cleaned_data.get(name))
+                for name in AUDITED_ACCOUNT_FIELDS
+                if name in form.changed_data and not (deactivating and name == "is_active")
+            }
+            if changes:
+                audit.record(
+                    "auth.account.updated",
+                    actor=actor,
+                    target_type="user",
+                    target_id=obj.pk,
+                    changes=changes,
+                )
         if deactivating:
-            revoked = deactivate_user(obj, actor=request.user)  # type: ignore[arg-type]
+            revoked = deactivate_user(obj, actor=actor)
             obj.is_active = False
             self.message_user(
                 request, f"Account deactivated; {revoked} session(s) revoked.", messages.INFO
+            )
+
+    def save_related(self, request: HttpRequest, form: Any, formsets: Any, change: bool) -> None:
+        super().save_related(request, form, formsets, change)
+        changed = [name for name in AUDITED_ACCOUNT_RELATIONS if name in form.changed_data]
+        if changed:
+            audit.record(
+                "auth.account.permissions_changed",
+                actor=request.user if isinstance(request.user, User) else None,
+                target_type="user",
+                target_id=form.instance.pk,
+                metadata={"changed_fields": changed},
             )
 
 
@@ -224,5 +272,8 @@ class AuthSessionAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
 
     @admin.action(description="Revoke selected sessions", permissions=["revoke"])
     def revoke_selected(self, request: HttpRequest, queryset: QuerySet[AuthSession]) -> None:
-        count = sum(revoke_session(session, RevokeReason.USER_REVOKED) for session in queryset)
+        actor = request.user if isinstance(request.user, User) else None
+        count = sum(
+            revoke_session(session, RevokeReason.USER_REVOKED, actor=actor) for session in queryset
+        )
         self.message_user(request, f"{count} session(s) revoked.", messages.INFO)

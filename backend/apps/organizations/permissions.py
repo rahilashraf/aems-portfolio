@@ -32,13 +32,19 @@ _PLATFORM_PERMISSIONS = {
 
 
 class IsPlatformAdministrator(BasePermission):
+    """Active staff holding the Django model permission mapped to the request method.
+
+    Subclasses for other platform resources override :attr:`method_permissions`.
+    """
+
     message = "You do not have permission to perform this action."
+    method_permissions: dict[str, str] = _PLATFORM_PERMISSIONS
 
     def has_permission(self, request: Request, view: Any) -> bool:
         user = request.user
         if not (getattr(user, "is_active", False) and getattr(user, "is_staff", False)):
             return False
-        required = _PLATFORM_PERMISSIONS.get(request.method or "")
+        required = self.method_permissions.get(request.method or "")
         return required is not None and user.has_perm(required)
 
 

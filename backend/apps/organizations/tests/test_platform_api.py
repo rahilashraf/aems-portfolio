@@ -8,6 +8,7 @@ from django.contrib.auth.models import Permission
 
 from apps.accounts.models import User
 from apps.accounts.tests.conftest import PASSWORD
+from apps.audit.models import AuditLog
 from apps.core import security_events
 from apps.organizations.models import Membership, Organization, OrganizationStatus
 
@@ -102,7 +103,12 @@ class TestCreate:
         assert organization.status == OrganizationStatus.PROVISIONING
         [event] = _events(events, "organization.created")
         assert event.user_id == str(platform_admin.pk)
-        assert event.metadata == {"organization_id": body["id"], "status": "provisioning"}
+        assert event.metadata["organization_id"] == body["id"]
+        assert event.metadata["status"] == "provisioning"
+        row = AuditLog.objects.get(action="organization.created")
+        assert str(row.organization_id) == body["id"]
+        assert (row.actor_id, row.actor_email) == (platform_admin.pk, platform_admin.email)
+        assert row.metadata == {"status": "provisioning"}
 
     def test_defaults_timezone_to_utc(self, platform_admin: User, api: Callable[..., Api]) -> None:
         assert api(platform_admin).post(LIST_URL, NEW_ORG).json()["timezone"] == "UTC"

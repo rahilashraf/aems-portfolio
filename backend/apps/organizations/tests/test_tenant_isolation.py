@@ -18,6 +18,7 @@ from rest_framework.test import APIRequestFactory
 
 from apps.accounts.models import User
 from apps.accounts.tests.conftest import PASSWORD
+from apps.audit.models import AuditLog
 from apps.core import security_events
 from apps.organizations.models import Membership, Organization
 from apps.organizations.permissions import HasOrgPermission
@@ -147,7 +148,11 @@ def test_denied_tenant_access_is_recorded(
     [event] = [e for e in events if e.name == "tenant.access_denied"]
     assert event.outcome == "failure"
     assert event.user_id == str(world.alice.pk)
-    assert event.metadata == {"organization_id": str(world.org_b.pk)}
+    row = AuditLog.objects.get(action="tenant.access_denied")
+    # Platform-level record: it is not written into organization B's tenant history.
+    assert row.organization_id is None
+    assert (row.target_type, row.target_id) == ("organization", str(world.org_b.pk))
+    assert row.actor_id == world.alice.pk
 
 
 def test_context_is_the_url_organization(world: World, api: Callable[..., Api]) -> None:

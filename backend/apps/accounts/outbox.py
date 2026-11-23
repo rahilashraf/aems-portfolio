@@ -46,7 +46,7 @@ from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
-from apps.core.security_events import record_security_event
+from apps.audit import services as audit
 
 from .models import PasswordResetDeliveryStatus as Status
 from .models import PasswordResetOutbox, User
@@ -183,15 +183,17 @@ class DeliveryReport:
         }
 
 
-def _event(name: str, row: PasswordResetOutbox, **fields: Any) -> None:
-    record_security_event(
-        name,
-        outcome="success" if name.endswith("delivered") else "failure",
-        user_id=row.user_id,
-        outbox_id=str(row.id),
-        attempt=row.attempts,
-        **fields,
-    )
+def _audit_fields(row: PasswordResetOutbox, **metadata: Any) -> dict[str, Any]:
+    """The subject is the user; no actor (the delivery command acts for the system)."""
+    return {
+        "target_type": "user",
+        "target_id": row.user_id,
+        "metadata": {"outbox_id": row.id, "attempt": row.attempts, **metadata},
+    }
+
+
+def _outcome_of(event: str) -> Any:
+    return "success" if event.endswith("delivered") else "failure"
 
 
 def expire_overdue(now: datetime) -> int:
@@ -205,8 +207,10 @@ def expire_overdue(now: datetime) -> int:
         PasswordResetOutbox.objects.filter(pk__in=[r.pk for r in rows]).update(
             status=Status.EXPIRED, completed_at=now, claim_id=None, claimed_until=None
         )
-    for row in rows:
-        _event("auth.password_reset.delivery_expired", row)
+        for row in rows:  # same transaction as the status change
+            audit.record(
+                "auth.password_reset.delivery_expired", outcome="failure", **_audit_fields(row)
+            )
     return len(rows)
 
 
@@ -230,12 +234,21 @@ def claim_next(now: datetime, *, lease: timedelta) -> PasswordResetOutbox | None
     return row
 
 
-def _finish(row: PasswordResetOutbox, **fields: Any) -> bool:
-    """Record an outcome only if this worker still holds the lease (compare-and-set)."""
-    updated = PasswordResetOutbox.objects.filter(
-        pk=row.pk, claim_id=row.claim_id, status=Status.PENDING
-    ).update(claim_id=None, claimed_until=None, **fields)
-    return updated == 1
+def _finish(
+    row: PasswordResetOutbox, event: str, metadata: dict[str, Any] | None = None, **fields: Any
+) -> bool:
+    """Record an outcome only if this worker still holds the lease (compare-and-set).
+
+    The status change and its audit record share one transaction.
+    """
+    with transaction.atomic():
+        updated = PasswordResetOutbox.objects.filter(
+            pk=row.pk, claim_id=row.claim_id, status=Status.PENDING
+        ).update(claim_id=None, claimed_until=None, **fields)
+        if updated != 1:
+            return False
+        audit.record(event, outcome=_outcome_of(event), **_audit_fields(row, **(metadata or {})))
+    return True
 
 
 def _send(user: User) -> None:
@@ -293,10 +306,14 @@ def deliver_claimed(row: PasswordResetOutbox, *, clock: Clock, config: OutboxSet
 
     now = clock()
     if not _finish(
-        row, status=Status.DELIVERED, delivered_at=now, completed_at=now, last_failure=""
+        row,
+        "auth.password_reset.email_delivered",
+        status=Status.DELIVERED,
+        delivered_at=now,
+        completed_at=now,
+        last_failure="",
     ):
         return _lease_lost(row)
-    _event("auth.password_reset.email_delivered", row)
     return Outcome.DELIVERED
 
 
@@ -307,10 +324,14 @@ def _finish_terminal(
     row: PasswordResetOutbox, outcome: Outcome, event: str, *, clock: Clock, reason: str = ""
 ) -> Outcome:
     if not _finish(
-        row, status=_TERMINAL_STATUS[outcome], completed_at=clock(), last_failure=reason
+        row,
+        event,
+        {"reason": reason} if reason else None,
+        status=_TERMINAL_STATUS[outcome],
+        completed_at=clock(),
+        last_failure=reason,
     ):
         return _lease_lost(row)
-    _event(event, row, **({"reason": reason} if reason else {}))
     return outcome
 
 
@@ -324,20 +345,20 @@ def _record_failure(
     else:
         delay = min(config.backoff_base * 2 ** (row.attempts - 1), config.backoff_cap)
         fields = {"next_attempt_at": now + delay}
-    if not _finish(row, last_failure=category.value, **fields):
-        return _lease_lost(row)
-    _event(
-        "auth.password_reset.delivery_failed",
+    if not _finish(
         row,
-        category=category.value,
-        retry_scheduled=not final,
-    )
+        "auth.password_reset.delivery_failed",
+        {"category": category.value, "retry_scheduled": not final},
+        last_failure=category.value,
+        **fields,
+    ):
+        return _lease_lost(row)
     return Outcome.FAILED if final else Outcome.RETRY_SCHEDULED
 
 
 def _lease_lost(row: PasswordResetOutbox) -> Outcome:
     # Another run reclaimed the row after our lease expired; its outcome wins.
-    _event("auth.password_reset.delivery_lease_lost", row)
+    audit.record_security_event("auth.password_reset.delivery_lease_lost", **_audit_fields(row))
     return Outcome.LEASE_LOST
 
 

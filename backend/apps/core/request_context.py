@@ -11,6 +11,8 @@ and Batch 4 will bind ``organization_id`` after tenant resolution, both via
 
 import re
 import uuid
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -54,6 +56,7 @@ def bind_request_context(**values: Any) -> None:
 def clear_request_context() -> None:
     """Remove all request-scoped context values."""
     structlog.contextvars.clear_contextvars()
+    _request_meta.set(None)
 
 
 def clear_request_context_on_request_finished(sender: Any, **kwargs: Any) -> None:
@@ -65,3 +68,27 @@ def get_request_id() -> str | None:
     """Return the current request ID, or None outside a request."""
     value = structlog.contextvars.get_contextvars().get("request_id")
     return value if isinstance(value, str) else None
+
+
+# ----------------------------------------------------------------------- request metadata
+@dataclass(frozen=True)
+class RequestMeta:
+    """Client details of the current request, for audit records (never added to every log line).
+
+    ``client_ip`` follows the trusted-proxy rules of :func:`apps.core.net.client_ip`;
+    ``user_agent`` is sanitized and truncated by the middleware.
+    """
+
+    client_ip: str | None
+    user_agent: str
+
+
+_request_meta: ContextVar[RequestMeta | None] = ContextVar("aems_request_meta", default=None)
+
+
+def bind_request_meta(meta: RequestMeta) -> None:
+    _request_meta.set(meta)
+
+
+def get_request_meta() -> RequestMeta | None:
+    return _request_meta.get()
