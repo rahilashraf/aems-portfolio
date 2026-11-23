@@ -144,7 +144,7 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
 | `PATCH /organizations/{org_id}/` | Routed, requires `organization.update`: **403 until Batch 6** |
 | `members/`, `roles/`, `permissions/` | Deferred to Batch 6 |
 | `invitations/`, `/invitations/{token}/…` | Deferred to Batch 7 |
-| `audit-logs/` | Deferred to Batch 5 |
+| `audit-logs/` | Added in Batch 5: requires `audit.view` (403 until Batch 6); see ADR-0016 |
 
 `/organizations/{org_id}/me/` returns the organization and the membership. Roles and effective
 permissions are added in Batch 6.
@@ -171,7 +171,9 @@ permissions are added in Batch 6.
 | `organization.profile_updated` | after commit; Batch 6 path |
 | `tenant.access_denied` | immediate |
 
-Events carry identifiers only. Batch 5 persists them durably; until then they exist only in logs.
+Events carry identifiers only. Since Batch 5 (ADR-0016) they are durable audit records:
+lifecycle events inside the mutation's transaction, `tenant.access_denied` as an independent
+security event without an organization.
 
 ## Batch 5–7 integration requirements
 - **Batch 5:** persist the events above, inside the transaction for mutations.

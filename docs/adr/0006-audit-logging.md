@@ -1,6 +1,6 @@
 # ADR-0006: Audit logging
 
-- **Status:** Accepted
+- **Status:** Accepted; implemented by [ADR-0016](0016-durable-audit-logging.md) (Batch 5)
 - **Date:** 2026-11-21
 
 ## Context
