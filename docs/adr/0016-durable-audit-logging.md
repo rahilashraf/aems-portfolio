@@ -122,7 +122,7 @@ Durable, transactional:
 - `auth.password_reset.requested`, `auth.password_reset.completed`;
 - `auth.session.revoked`, `auth.sessions.revoked`, `auth.refresh.reuse_detected`;
 - `auth.account.created`, `auth.account.updated`, `auth.account.permissions_changed`,
-  `auth.account.deactivated`;
+  `auth.account.deactivated`, `auth.account.profile_updated`;
 - `auth.password_reset.email_delivered`, `delivery_failed`, `delivery_expired`,
   `delivery_cancelled`;
 - `organization.created`, `organization.updated`, `organization.status_changed`,
@@ -130,14 +130,36 @@ Durable, transactional:
 
 Durable, independent:
 - `auth.login.failed`, `auth.login.locked`, `auth.rate_limited`, `auth.csrf.failed`;
-- `auth.refresh.rejected` (with a `reason`), `auth.session.owner_mismatch`, `auth.logout`;
+- `auth.refresh.rejected` (with a `reason`), `auth.session.owner_mismatch`;
 - `auth.password_change.failed`, `auth.password_reset.failed`,
   `auth.password_reset.enqueue_failed`, `auth.password_reset.delivery_lease_lost`;
 - `auth.admin_login.failed`, `auth.admin_login.rate_limited`, `auth.admin_login.succeeded`;
 - `tenant.access_denied`.
 
-Log only: `auth.refresh.rotated`. It happens every few minutes per session and changes no account
-state; session creation is covered by `auth.login.succeeded`.
+Log only:
+- `auth.refresh.rotated`. It happens every few minutes per session and changes no account state;
+  session creation is covered by `auth.login.succeeded`.
+- `auth.logout`. The mutation a logout performs is recorded as `auth.session.revoked` inside the
+  revocation transaction, and a logout that revokes nothing changes no state.
+
+### Failure policy for mutations recorded in their own transaction (review findings)
+- **Profile changes (AEMS-015).** `PATCH /auth/me/` calls `accounts.services.update_profile`. It
+  locks the user row, applies only the allowlisted profile fields (`full_name`) and records
+  `auth.account.profile_updated` (actor and target: the user; `changes` with `from`/`to`) in the
+  same transaction. A submission that changes nothing writes nothing and records nothing. If the
+  audit insert fails, the change rolls back and the request fails; the response body is unchanged
+  otherwise.
+- **Logout (AEMS-016).** Previously the revocation committed and then a separate durable
+  `auth.logout` row was inserted; if that insert failed, a completed logout returned 500.
+  Now:
+  - an actual revocation and its `auth.session.revoked` record commit together, or neither does;
+    if the mandatory record cannot be written, nothing is revoked, the cookie is not cleared and
+    the request fails (no 204 for a revocation that did not happen);
+  - nothing durable is written after that commit; `auth.logout` is an observational log line and
+    log sinks never raise;
+  - events recorded *before* any mutation (`auth.csrf.failed`, `auth.refresh.rejected`,
+    `auth.session.owner_mismatch`) are unchanged: if they cannot be written the request fails with
+    nothing committed.
 
 ### Organization association policy
 - **Organization events** (`organization.*`) carry the organization and form its tenant history.

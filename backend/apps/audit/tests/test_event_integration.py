@@ -63,14 +63,13 @@ class TestAuthenticationEvents:
         [rejected] = rows(action="auth.refresh.rejected")
         assert rejected.metadata == {"reason": "invalid_token"}
 
-    def test_logout_records_revocation_and_logout(self, user: User) -> None:
+    def test_logout_records_the_revocation_only(self, user: User) -> None:
         session = do_login(user.email)
         assert session.client.post(LOGOUT_URL, **session.csrf_headers()).status_code == 204
         [revoked] = rows(action="auth.session.revoked")
-        [logout] = rows(action="auth.logout")
         assert revoked.metadata["reason"] == RevokeReason.LOGOUT
         assert revoked.actor_id == user.pk
-        assert logout.metadata == {"session_id": revoked.target_id, "revoked": True}
+        assert rows(action="auth.logout") == []  # AEMS-016: observational log only
 
     def test_session_revocation_endpoints(self, user: User) -> None:
         first, second, third = (do_login(user.email) for _ in range(3))

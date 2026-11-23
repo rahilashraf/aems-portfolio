@@ -283,6 +283,44 @@ def _user_from_uid(uid: str) -> User | None:
         return None
 
 
+# --------------------------------------------------------------------------- profile
+#: Fields a user may change on their own profile (``PATCH /auth/me/``).
+PROFILE_FIELDS = ("full_name",)
+
+
+def update_profile(user: User, changes: dict[str, Any], *, client_ip: str | None = None) -> User:
+    """Apply a self-service profile change and record it in the same transaction.
+
+    Only :data:`PROFILE_FIELDS` are applied. The user row is locked so the recorded ``from`` value
+    is the one actually replaced. A submission that changes nothing writes nothing and records
+    nothing. If the audit insert fails, the change rolls back (ADR-0016).
+    """
+    unknown = set(changes) - set(PROFILE_FIELDS)
+    if unknown:
+        msg = f"Profile fields {sorted(unknown)} cannot be changed here."
+        raise ValueError(msg)
+    with transaction.atomic():
+        locked = User.objects.select_for_update().get(pk=user.pk)
+        diff = {
+            name: (getattr(locked, name), value)
+            for name, value in changes.items()
+            if getattr(locked, name) != value
+        }
+        if diff:
+            for name, (_before, after) in diff.items():
+                setattr(locked, name, after)
+            locked.save(update_fields=list(diff))
+            audit.record(
+                "auth.account.profile_updated",
+                actor=locked,
+                target_type="user",
+                target_id=locked.pk,
+                changes=diff,
+                client_ip=client_ip,
+            )
+    return locked
+
+
 # --------------------------------------------------------------------------- deactivation
 def deactivate_user(user: User, *, actor: User | None = None) -> int:
     """Deactivate an account and revoke all of its sessions in one transaction.

@@ -326,7 +326,7 @@ class TestLogoutTokenBinding:
         [logout] = [e for e in events if e.name == "auth.logout"]
         assert logout.session_id is None
         assert logout.metadata["revoked"] is False
-        assert AuditLog.objects.get(action="auth.logout").metadata == {"revoked": False}
+        assert not AuditLog.objects.filter(action="auth.logout").exists()  # log only
 
     def test_mismatched_cookie_does_not_block_the_callers_bearer_logout(
         self, make_user: Any

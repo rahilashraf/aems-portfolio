@@ -750,7 +750,14 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 - **`apps.core.security_events` is log-only.** Durable records are written by the audit service
   directly, not by a sink. Mutation records are inside their transactions; independent events use
   `transaction.atomic(durable=True)`.
-- **`auth.refresh.rotated` stays a log-only event** (high volume, no account state change).
+- **`auth.refresh.rotated` and `auth.logout` are log-only events.** Rotation is high volume and
+  changes no account state. A logout that revokes a session is recorded durably as
+  `auth.session.revoked` in the revocation's transaction; a separate durable `auth.logout` row
+  would duplicate it and, written after the revocation committed, could turn a completed logout
+  into a 500 (review finding AEMS-016).
+- **Self-service profile changes** (`PATCH /auth/me/`) go through `accounts.services.update_profile`
+  and record `auth.account.profile_updated` in the same transaction; unchanged submissions record
+  nothing (review finding AEMS-015).
   Session creation is recorded by `auth.login.succeeded`. Undecodable refresh tokens are now
   recorded as `auth.refresh.rejected`.
 - **New admin events:** account creation, privileged-field and permission changes, and the
