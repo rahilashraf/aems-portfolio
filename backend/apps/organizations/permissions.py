@@ -66,9 +66,9 @@ class HasOrgPermission(BasePermission):
 
     The key of an action is ``view.action`` (ViewSets) or the lower-case HTTP method (APIViews).
 
-    - ``member_actions``: read-only actions any active member may perform (for example viewing the
-      organization profile). Honoured **only for safe methods**, so membership alone can never
-      authorize a write.
+    - ``member_actions``: read-only actions any active member may perform (for example reading
+      their own membership at ``me/``). Honoured **only for safe methods**, so membership alone
+      can never authorize a write.
     - ``required_permissions``: ``{"patch": ("organization.update",)}``. Every listed permission is
       required, evaluated for this organization only.
     - Anything not declared is denied.

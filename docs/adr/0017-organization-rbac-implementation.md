@@ -161,7 +161,8 @@ authoritative. The organization profile update (`organization.update`) uses the 
 | `GET roles/`, `GET roles/{id}/`, `GET permissions/` | `roles.view` |
 | `POST roles/`, `PATCH roles/{id}/`, `DELETE roles/{id}/` | `roles.manage` |
 | `PATCH /` (organization profile) | `organization.update` |
-| `GET me/` | any active member; now includes `roles` and effective `permissions` |
+| `GET /` (organization profile) | `organization.view` (AEMS-017; Member, Admin and Owner hold it by default) |
+| `GET me/` | any active member, with or without `organization.view`; includes `roles` and effective `permissions` |
 | `GET audit-logs/` | `audit.view` (now grantable) |
 
 - **Conventions.** All routes use the tenant mixin and `HasOrgPermission`, enforced by the
@@ -195,17 +196,29 @@ recorded in their transactions.
 - **No-op requests** write and record nothing.
 - **Audit failure.** If the audit insert fails, the mutation rolls back.
 
-## Deviations from the plan
+### Organization profile access (review finding AEMS-017)
+`GET /organizations/{org_id}/` requires `organization.view` through `HasOrgPermission`. Before
+AEMS-017 it was a member action, readable by any active member. It is now a permission-gated
+action like every other tenant read:
+- The default Member role keeps `organization.view`, so ordinary members are unaffected.
+- A member with no role, or only roles without the permission, gets 403. Revoking the permission
+  takes effect on the next request.
+- Tenant resolution is unchanged. Suspended memberships, suspended or provisioning
+  organizations, non-members, other tenants and platform staff or superusers without a
+  membership get 404; unauthenticated callers get 401.
+- `GET /organizations/{org_id}/me/` stays a member action: every active member can always read
+  their own membership, roles and effective permissions.
+
+## Deviations from the plan (approved in the Batch 6 review)
 1. **`MembershipRole` lives in `apps.rbac`**, not `apps.organizations` (plan §5.3), as the Batch 6
    authorization requires a dedicated RBAC app. The composite foreign keys keep it bound to the
    membership's organization.
-2. **`GET /organizations/{org_id}/` and `GET …/me/` stay open to every active member**, as declared
-   in Batch 4. `organization.view` is registered and granted by default, but does not gate them.
-   Requiring it would change the Batch 4 contract for members without roles. This needs a
-   review decision.
-3. **Delegation also covers status changes and removal**, and Owners can only be changed by
-   Owners. The plan states delegation for grants and assignments only.
-4. **Assigned roles cannot be deleted** (409) rather than being removed from their holders.
+2. **Delegation also covers status changes and removal**: suspending or removing a member requires
+   authority over every permission that member holds. The plan states delegation for grants and
+   assignments only.
+3. **Only Owners modify memberships belonging to Owners** (status, removal and roles).
+4. **Assigned custom roles cannot be deleted** (409 `role_in_use`) rather than being removed from
+   their holders.
 5. **Database-level safeguards beyond the plan:**
    - composite foreign keys;
    - immutable, undeletable permission rows;
@@ -213,9 +226,9 @@ recorded in their transactions.
 6. **Deactivation locks every organization of the user**, not only those where the user is an
    Owner (see above).
 7. **Not added:**
-   - platform RBAC endpoints (plan §6.4 mentions them; no Batch 6 requirement);
-   - `suspended → active` reactivation, which stays rejected: it needs an Owner check and a
-     product decision;
+   - platform RBAC endpoints (plan §6.4 mentions them): deferred, no workflow invented;
+   - `suspended → active` reactivation: stays disabled;
+   - the initial Owner invitation and `provisioning → active`: Batch 7;
    - self-service leaving of an organization.
 
 ## Batch 7 dependencies

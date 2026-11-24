@@ -246,8 +246,7 @@ organizations ([ADR-0003](docs/adr/0003-tenant-isolation.md),
   unknown organization, another tenant's organization, a provisioning or suspended organization,
   a suspended membership and a platform administrator without a membership all receive the
   **same 404**.
-- **Authorization is default deny.** Members may use declared read-only actions (the profile and
-  `me/`). Anything else needs an organization permission granted by the member's roles in that
+- **Authorization is default deny.** Every active member may read their own `me/`. Anything else needs an organization permission granted by the member's roles in that
   organization (see [Roles and permissions](#roles-and-permissions)).
 - **Lifecycle.** New organizations start in `provisioning` and are closed to tenant APIs. They
   become `active` only when an initial Owner accepts an invitation (Batch 7); there is **no manual
@@ -258,7 +257,7 @@ organizations ([ADR-0003](docs/adr/0003-tenant-isolation.md),
 | Endpoint | Purpose | Access |
 |---|---|---|
 | `GET /api/v1/organizations/` | My organizations: active memberships in active organizations | Bearer |
-| `GET /api/v1/organizations/{org_id}/` | Organization profile | Active member |
+| `GET /api/v1/organizations/{org_id}/` | Organization profile | `organization.view` (default Member role) |
 | `PATCH /api/v1/organizations/{org_id}/` | Update `name`/`timezone` | `organization.update` |
 | `GET /api/v1/organizations/{org_id}/me/` | My membership, roles and effective permissions | Active member |
 | `GET`, `POST /api/v1/platform/organizations/` | List (filter `status`, `organization_type`; order `name`, `slug`, `created_at`, `status`) or create (`name`, `slug`, `organization_type`, `timezone`) | Platform administrator |

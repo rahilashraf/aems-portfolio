@@ -25,6 +25,7 @@ from apps.organizations.models import (
     OrganizationStatus,
     OrganizationType,
 )
+from apps.rbac.models import MembershipRole, Role, SystemRole
 from apps.rbac.services import seed_system_roles
 
 
@@ -121,6 +122,19 @@ def add_member(
     return Membership.objects.create(organization=organization, user=user, status=status)
 
 
+def add_default_member(
+    organization: Organization, user: User, status: str = MembershipStatus.ACTIVE
+) -> Membership:
+    """TEST ONLY: a membership holding the default Member role (as real members do)."""
+    membership = add_member(organization, user, status)
+    MembershipRole(
+        organization=organization,
+        membership=membership,
+        role=Role.objects.get(organization=organization, system_key=SystemRole.MEMBER),
+    ).save()
+    return membership
+
+
 @dataclass
 class World:
     """Two organizations plus every kind of caller the isolation matrix needs."""
@@ -158,13 +172,13 @@ def world(
         platform_admin=platform_admin,
         outsider=make_user("outsider@example.org"),
     )
-    add_member(org_a, w.alice)
-    add_member(org_b, w.bob)
-    add_member(org_a, w.carol)
-    add_member(org_b, w.carol)
-    add_member(org_a, w.dave, MembershipStatus.SUSPENDED)
-    add_member(provisioning, w.erin)
-    add_member(suspended, w.erin)
+    add_default_member(org_a, w.alice)
+    add_default_member(org_b, w.bob)
+    add_default_member(org_a, w.carol)
+    add_default_member(org_b, w.carol)
+    add_default_member(org_a, w.dave, MembershipStatus.SUSPENDED)
+    add_default_member(provisioning, w.erin)
+    add_default_member(suspended, w.erin)
     return w
 
 

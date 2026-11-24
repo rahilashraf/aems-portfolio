@@ -779,9 +779,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   keys on `(id, organization_id)` make a cross-tenant assignment impossible even with raw SQL.
 - **Permission rows are protected in the database:** codes are immutable and rows cannot be
   deleted; retired codes are deprecated and grant nothing.
-- **Organization profile and `me/` stay member actions** (Batch 4 declarations preserved).
-  `organization.view` is registered and granted to Admin and Member by default, but gates no
-  endpoint yet. This needs a review decision.
+- **`GET /organizations/{org_id}/` requires `organization.view`** (review finding AEMS-017), which
+  the default Member role holds. `me/` stays available to every active member.
+- The deviations below were approved in the Batch 6 review.
 - **Delegation is broader than §6.4:**
   - suspending, reactivating or removing a member requires holding every permission the member's
     roles confer;

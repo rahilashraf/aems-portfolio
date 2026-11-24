@@ -5,8 +5,9 @@ Active routes:
 - Platform (staff + model permission): ``GET|POST /platform/organizations/``,
   ``GET|PATCH /platform/organizations/{id}/``.
 - Self: ``GET /organizations/`` (the caller's active memberships in active organizations).
-- Tenant (``OrganizationScopedViewMixin``): ``GET /organizations/{org_id}/``,
-  ``GET /organizations/{org_id}/me/`` (any active member), ``PATCH /organizations/{org_id}/``
+- Tenant (``OrganizationScopedViewMixin``): ``GET /organizations/{org_id}/`` (requires
+  ``organization.view``), ``GET /organizations/{org_id}/me/`` (any active member),
+  ``PATCH /organizations/{org_id}/``
   (requires ``organization.update``, re-checked in the service under the organization lock).
 
 Members, roles and permissions live in :mod:`apps.rbac.api.views`; audit logs in
@@ -157,13 +158,19 @@ class MyOrganizationListView(AemsGenericAPIView):
 # ---------------------------------------------------------------------------------- tenant
 class OrganizationDetailView(OrganizationScopedViewMixin, AemsGenericAPIView):
     permission_classes = [HasOrgPermission]
-    member_actions = ("get",)
-    required_permissions = {"patch": ("organization.update",)}
+    # AEMS-017: reading the profile needs organization.view (granted to the Member role by
+    # default). The caller's own membership stays available to every member at me/.
+    required_permissions = {"get": ("organization.view",), "patch": ("organization.update",)}
     serializer_class = s.OrganizationSerializer
 
     @extend_schema(
         operation_id="organizations_retrieve",
         summary="Get the organization",
+        description=(
+            "Requires the `organization.view` permission (held by the default Member, Admin and "
+            "Owner roles). Every active member can still read their own membership, roles and "
+            "permissions at `GET /organizations/{org_id}/me/`."
+        ),
         tags=[TENANT_TAG],
     )
     def get(self, request: Request, org_id: Any) -> Response:

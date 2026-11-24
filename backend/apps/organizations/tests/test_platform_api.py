@@ -12,7 +12,7 @@ from apps.audit.models import AuditLog
 from apps.core import security_events
 from apps.organizations.models import Membership, Organization, OrganizationStatus
 
-from .conftest import Api, World, add_member, error_fields
+from .conftest import Api, World, add_default_member, error_fields
 
 pytestmark = pytest.mark.django_db
 LIST_URL = "/api/v1/platform/organizations/"
@@ -301,7 +301,7 @@ def test_platform_admin_with_membership_still_follows_tenant_rules(
     world: World, platform_admin: User, api: Callable[..., Api]
 ) -> None:
     """Platform status adds nothing inside a tenant: a membership is needed, and it is checked."""
-    add_member(world.org_b, platform_admin)
+    add_default_member(world.org_b, platform_admin)
     client = api(platform_admin)
     assert client.get(f"/api/v1/organizations/{world.org_b.pk}/").status_code == 200
     assert client.get(f"/api/v1/organizations/{world.org_a.pk}/").status_code == 404

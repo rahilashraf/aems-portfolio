@@ -753,14 +753,9 @@ paths:
   /api/v1/organizations/{org_id}/:
     get:
       operationId: organizations_retrieve
-      description: |-
-        Resolve and enforce the organization from the URL for every request.
-
-        Place it **before** the project base view class::
-
-            class ThingView(OrganizationScopedViewMixin, AemsGenericAPIView):
-                tenant_model = Thing
-                permission_classes = [TenantMemberReadOnly]
+      description: Requires the `organization.view` permission (held by the default
+        Member, Admin and Owner roles). Every active member can still read their own
+        membership, roles and permissions at `GET /organizations/{org_id}/me/`.
       summary: Get the organization
       parameters:
       - in: path

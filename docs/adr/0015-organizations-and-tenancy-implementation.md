@@ -145,7 +145,7 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
 |---|---|
 | `GET/POST /platform/organizations/`, `GET/PATCH /platform/organizations/{id}/` | Active |
 | `GET /organizations/` | Active: the caller's active memberships in active organizations only |
-| `GET /organizations/{org_id}/`, `GET /organizations/{org_id}/me/` | Active (any active member) |
+| `GET /organizations/{org_id}/`, `GET /organizations/{org_id}/me/` | Active (any active member). Since Batch 6 (AEMS-017) the profile requires `organization.view`; `me/` stays open to members |
 | `PATCH /organizations/{org_id}/` | Requires `organization.update` (active since Batch 6) |
 | `members/`, `roles/`, `permissions/` | Added in Batch 6; see ADR-0017 |
 | `invitations/`, `/invitations/{token}/…` | Deferred to Batch 7 |

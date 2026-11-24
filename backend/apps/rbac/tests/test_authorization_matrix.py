@@ -35,7 +35,7 @@ def _victim(team: Team) -> Any:
 
 
 ENDPOINTS = [
-    Endpoint("org-detail", "get", lambda t, v: url(t.org), None),
+    Endpoint("org-detail", "get", lambda t, v: url(t.org), "organization.view"),  # AEMS-017
     Endpoint(
         "org-update",
         "patch",
