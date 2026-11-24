@@ -426,6 +426,9 @@ All configuration comes from environment variables (see [`.env.example`](.env.ex
 | `DJANGO_AUTH_REFRESH_COOKIE_SECURE` | `true` (`false` in local settings) | Secure flag on the refresh cookie (production requires `true`) |
 | `DJANGO_TRUSTED_PROXY_COUNT` | `0` | Number of trusted reverse proxies whose `X-Forwarded-For` entry is used as the client IP |
 | `DJANGO_ADMIN_URL` | `admin/` | Path of the staff-only admin |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | none | Origins trusted for cookie-authenticated requests; production requires explicit `https://` origins |
+| `EMAIL_URL` | `consolemail://` | Outgoing mail; production requires `smtp+tls://` or `smtps://` |
+| `AEMS_EMAIL_ALLOW_UNENCRYPTED_SMTP` | `false` | Allow plain `smtp://` in production (isolated test networks only) |
 
 Every environment refuses to start unless `DATABASE_URL` resolves to the PostgreSQL backend
 (`postgres://`, `postgresql://`, or `pgsql://`); SQLite and other engines are rejected.
@@ -440,7 +443,13 @@ Every environment refuses to start unless `DATABASE_URL` resolves to the Postgre
 - `DJANGO_API_DOCS_ENABLED` is true;
 - a CORS origin is a wildcard, `null`, malformed, or not HTTPS;
 - `DJANGO_JWT_SIGNING_KEY` is missing, weak, a placeholder, or equal to `DJANGO_SECRET_KEY`;
-- the refresh cookie is not `Secure`, or `DJANGO_PASSWORD_MIN_LENGTH` is below 12.
+- the refresh cookie is not `Secure`, or `DJANGO_PASSWORD_MIN_LENGTH` is below 12;
+- `DJANGO_CSRF_TRUSTED_ORIGINS` contains a non-HTTPS or wildcard origin;
+- `EMAIL_URL` is not SMTP, or is unencrypted SMTP without `AEMS_EMAIL_ALLOW_UNENCRYPTED_SMTP=true`
+  (meant only for an isolated test network such as the CI Mailpit container).
+
+See [SECURITY.md](SECURITY.md) for the complete production requirements, secret management,
+email-domain authentication (SPF, DKIM, DMARC) and outbox operation.
 
 **Trusted TLS proxy (`DJANGO_BEHIND_TLS_PROXY`, default `false`).** When enabled, Django treats a
 request as HTTPS if it carries `X-Forwarded-Proto: https`. Enable it **only** when every request
@@ -474,6 +483,13 @@ push to `main`, with no path filters ([ADR-0011](docs/adr/0011-continuous-integr
 | API contract | OpenAPI generation, validation and drift check |
 | Docker image | clean build of the committed Dockerfile, non-root, container becomes `healthy`, endpoint behaviour, password reset and initial Owner onboarding through Mailpit, audit and RBAC database safeguards |
 | Backend CI result | passes only if every job above passed (recommended required check) |
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting, the security model, production
+requirements and known limitations. The cross-cutting security suites live in
+[`backend/tests/security/`](backend/tests/security/) (ADR-0019), and the Phase 1 assessment is in
+[`docs/phase-1-final-report.md`](docs/phase-1-final-report.md).
 
 ## Contributing
 
