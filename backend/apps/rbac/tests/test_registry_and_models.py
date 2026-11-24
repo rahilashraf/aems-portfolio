@@ -246,6 +246,7 @@ class TestSeeding:
             name="New",
             slug="new-org",
             organization_type=OrganizationType.OTHER,
+            initial_owner_email="first-owner@example.org",
         )
         roles = {r.system_key: r for r in Role.objects.for_organization(organization)}
         assert set(roles) == {"owner", "admin", "member"}
@@ -279,7 +280,11 @@ class TestSeeding:
         monkeypatch.setattr("apps.organizations.services.rbac.seed_system_roles", broken)
         with pytest.raises(DatabaseError):
             create_organization(
-                actor=platform_admin, name="X", slug="x-org", organization_type="other"
+                actor=platform_admin,
+                name="X",
+                slug="x-org",
+                organization_type="other",
+                initial_owner_email="o@example.org",
             )
         assert not Organization.objects.filter(slug="x-org").exists()
 
@@ -288,7 +293,12 @@ class TestSeeding:
     ) -> None:
         response = as_user(platform_admin).post(
             "/api/v1/platform/organizations/",
-            {"name": "Api", "slug": "api-org", "organization_type": "school"},
+            {
+                "name": "Api",
+                "slug": "api-org",
+                "organization_type": "school",
+                "initial_owner_email": "o@example.org",
+            },
         )
         assert response.status_code == 201
         assert Role.objects.filter(organization_id=response.json()["id"]).count() == 3

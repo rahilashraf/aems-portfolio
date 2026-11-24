@@ -26,7 +26,13 @@ SECRET = "S3cret-Marker-Value-0123456789"  # appears in inputs; must never be st
 
 
 def _create(actor: Any, slug: str = "audited") -> Organization:
-    return create_organization(actor=actor, name="Audited", slug=slug, organization_type="school")
+    return create_organization(
+        actor=actor,
+        name="Audited",
+        slug=slug,
+        organization_type="school",
+        initial_owner_email="owner@example.org",
+    )
 
 
 # ------------------------------------------------------------------ transactional events

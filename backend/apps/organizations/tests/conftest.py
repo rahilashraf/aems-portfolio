@@ -89,7 +89,12 @@ def platform_admin(make_user: Callable[..., User]) -> User:
     user.user_permissions.add(
         *Permission.objects.filter(
             content_type__app_label="organizations",
-            codename__in=["view_organization", "add_organization", "change_organization"],
+            codename__in=[
+                "view_organization",
+                "add_organization",
+                "change_organization",
+                "manage_initial_owner_invitation",
+            ],
         )
     )
     return User.objects.get(pk=user.pk)  # reload: permission cache
@@ -188,3 +193,18 @@ def api() -> Callable[[User | None], Api]:
         return Api(bearer(user) if user is not None else {})
 
     return _api
+
+
+@pytest.fixture
+def team(
+    make_user: Callable[..., User], make_org: Callable[..., Organization], platform_admin: User
+) -> Any:
+    """The RBAC test organization (one member per kind of role), for invitation tests."""
+    from apps.rbac.tests.conftest import build_team  # noqa: PLC0415 - avoids an import cycle
+
+    return build_team(make_user, make_org, platform_admin)
+
+
+@pytest.fixture
+def as_user(api: Callable[[User | None], Api]) -> Callable[[User | None], Api]:
+    return api

@@ -14,6 +14,7 @@ urlpatterns = [
     path("", ApiRootView.as_view(), name="root"),
     path("auth/", include("apps.accounts.api.urls", namespace="auth")),
     path("organizations/", include("apps.organizations.api.urls", namespace="organizations")),
+    path("invitations/", include("apps.organizations.api.public_urls", namespace="invitations")),
     path("platform/", include("apps.organizations.api.platform_urls", namespace="platform")),
     path("platform/", include("apps.audit.api.platform_urls", namespace="platform-audit")),
 ]

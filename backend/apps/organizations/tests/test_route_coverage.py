@@ -12,7 +12,8 @@ from django.urls import URLPattern, get_resolver
 from rest_framework.permissions import SAFE_METHODS
 from rest_framework.views import APIView
 
-from apps.core.api.permissions import iter_url_patterns
+from apps.core.api.permissions import PublicEndpoint, iter_url_patterns
+from apps.organizations.api.invitation_views import SENSITIVE_HEADERS, PublicInvitationView
 from apps.organizations.permissions import HasOrgPermission, IsPlatformAdministrator
 from apps.organizations.scoping import ORGANIZATION_URL_KWARG, OrganizationScopedViewMixin
 from apps.rbac.registry import registry
@@ -20,6 +21,7 @@ from apps.rbac.registry import registry
 HANDLERS = ("get", "post", "put", "patch", "delete")
 TENANT_PREFIX = "api/v1/organizations/"
 PLATFORM_PREFIX = "api/v1/platform/"
+INVITATION_PREFIX = "api/v1/invitations/"
 
 
 def _routes() -> list[tuple[str, str | None, type[APIView]]]:
@@ -45,6 +47,7 @@ def _routes() -> list[tuple[str, str | None, type[APIView]]]:
 ROUTES = _routes()
 TENANT_ROUTES = [r for r in ROUTES if f"<uuid:{ORGANIZATION_URL_KWARG}>" in r[0]]
 PLATFORM_ROUTES = [r for r in ROUTES if r[0].startswith(PLATFORM_PREFIX)]
+INVITATION_ROUTES = [r for r in ROUTES if r[0].startswith(INVITATION_PREFIX)]
 
 
 def test_inventory_is_complete() -> None:
@@ -58,11 +61,19 @@ def test_inventory_is_complete() -> None:
         "api/v1/organizations/<uuid:org_id>/roles/",
         "api/v1/organizations/<uuid:org_id>/roles/<uuid:role_id>/",
         "api/v1/organizations/<uuid:org_id>/permissions/",
+        "api/v1/organizations/<uuid:org_id>/invitations/",
+        "api/v1/organizations/<uuid:org_id>/invitations/<uuid:invitation_id>/revoke/",
     }
     assert {r[0] for r in PLATFORM_ROUTES} == {
         "api/v1/platform/organizations/",
         "api/v1/platform/organizations/<uuid:organization_id>/",
         "api/v1/platform/audit-logs/",
+        "api/v1/platform/organizations/<uuid:organization_id>/initial-owner-invitation/",
+        "api/v1/platform/organizations/<uuid:organization_id>/initial-owner-invitation/revoke/",
+    }
+    assert {r[0] for r in INVITATION_ROUTES} == {
+        "api/v1/invitations/<str:token>/",
+        "api/v1/invitations/<str:token>/accept/",
     }
 
 
@@ -124,6 +135,23 @@ def test_platform_routes_require_platform_administrators(
     assert isinstance(permission, type), route
     assert issubclass(permission, IsPlatformAdministrator), route
     assert not issubclass(view, OrganizationScopedViewMixin), route
+
+
+@pytest.mark.parametrize(
+    ("route", "name", "view"), INVITATION_ROUTES, ids=[r[0] for r in INVITATION_ROUTES]
+)
+def test_public_invitation_routes_are_explicit_token_scoped_exceptions(
+    route: str, name: str | None, view: type[APIView]
+) -> None:
+    """The only public routes touching tenant data: token-scoped, allowlisted, never cached."""
+    assert issubclass(view, PublicInvitationView), route
+    assert list(view.permission_classes) == [PublicEndpoint], route
+    assert f"api-v1:invitations:{name}" in settings.API_PUBLIC_ENDPOINTS, route
+    assert not issubclass(view, OrganizationScopedViewMixin), route
+    assert "<str:token>" in route
+    assert SENSITIVE_HEADERS["Cache-Control"].startswith("no-store")
+    assert SENSITIVE_HEADERS["Referrer-Policy"] == "no-referrer"
+    assert {h for h in HANDLERS if hasattr(view, h)} <= {"get", "post"}
 
 
 def test_no_organization_route_is_public() -> None:

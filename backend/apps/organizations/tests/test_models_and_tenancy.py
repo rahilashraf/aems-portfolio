@@ -319,5 +319,9 @@ class TestSelectorsAndServices:
         monkeypatch.setattr(Organization, "save", boom)
         with pytest.raises(IntegrityError):
             services.create_organization(
-                actor=platform_admin, name="X", slug="xyz", organization_type="school"
+                actor=platform_admin,
+                name="X",
+                slug="xyz",
+                organization_type="school",
+                initial_owner_email="o@example.org",
             )

@@ -90,9 +90,18 @@ def team(
     make_org: Callable[..., Organization],  # noqa: F811
     platform_admin: User,  # noqa: F811
 ) -> Team:
-    org, other = make_org(slug="acme"), make_org(slug="globex")
+    return build_team(make_user, make_org, platform_admin)
+
+
+def build_team(
+    user_factory: Callable[..., User],
+    org_factory: Callable[..., Organization],
+    platform_admin_user: User,
+) -> Team:
+    """Organization A with one member per kind of role, organization B, and outsiders."""
+    org, other = org_factory(slug="acme"), org_factory(slug="globex")
     users = {
-        name: make_user(f"{name}@example.org")
+        name: user_factory(f"{name}@example.org")
         for name in (
             "owner",
             "admin",
@@ -132,7 +141,7 @@ def team(
         inactive=User.objects.get(pk=users["inactive"].pk),
         other_owner=users["other_owner"],
         outsider=users["outsider"],
-        platform_admin=platform_admin,
+        platform_admin=platform_admin_user,
         superuser=superuser,
         auditors=auditors,
     )
