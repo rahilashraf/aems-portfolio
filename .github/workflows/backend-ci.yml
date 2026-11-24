@@ -314,6 +314,7 @@ jobs:
             -e DJANGO_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
             -e DJANGO_JWT_SIGNING_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
             -e DJANGO_ALLOWED_HOSTS="$API_HOST" \
+            -e AEMS_FRONTEND_BASE_URL=https://app.example.org \
             -e DJANGO_BEHIND_TLS_PROXY=true \
             -e DATABASE_URL=postgres://aems_app:ci-only-app-password@aems-db:5432/aems \
             -e EMAIL_URL=smtp://aems-mail:1025 \
@@ -466,7 +467,7 @@ jobs:
           field() { python3 -c "import json; print(json.load(open('/tmp/org.json'))$1)"; }
 
           call 201 POST /api/v1/platform/organizations/ \
-            '{"name": "CI Academy", "slug": "CI-Academy", "organization_type": "school", "timezone": "Europe/London"}'
+            '{"name": "CI Academy", "slug": "CI-Academy", "organization_type": "school", "timezone": "Europe/London", "initial_owner_email": "owner@ci-academy.example.org"}'
           org_id="$(field '["id"]')"
           test "$(field '["status"]')" = provisioning
           test "$(field '["slug"]')" = ci-academy
@@ -531,6 +532,82 @@ jobs:
           expect_error "${app[@]}" "DELETE FROM rbac_permission" "cannot be deleted"
           expect_error "${app[@]}" "UPDATE rbac_permission SET code = 'audit.read' WHERE code = 'audit.view'" "immutable"
           echo "Catalog synced, roles seeded without an Owner, permission rows protected"
+
+      - name: Initial Owner onboarding through the emailed invitation activates the organization
+        run: |
+          base=http://127.0.0.1:8000
+          mailpit=http://127.0.0.1:8025
+          # Creating the organization queued the initial Owner invitation; nothing was sent yet.
+          docker exec aems-api python manage.py deliver_invitation_emails --status
+          out="$(docker exec aems-api python manage.py deliver_invitation_emails)"
+          echo "$out"
+          grep -q 'delivered=1' <<<"$out"
+          # Preview and accept with the emailed link, as a new account. The token is never printed.
+          python3 - "$mailpit" "$base" "$API_HOST" <<'PY'
+          import json, re, sys, urllib.error, urllib.request
+
+          mailpit, base, host = sys.argv[1:]
+          owner = "owner@ci-academy.example.org"
+          messages = json.load(urllib.request.urlopen(f"{mailpit}/api/v1/messages"))["messages"]
+          [summary] = [m for m in messages if [t["Address"] for t in m["To"]] == [owner]]
+          text = json.load(urllib.request.urlopen(f"{mailpit}/api/v1/message/{summary['ID']}"))["Text"]
+          assert "CI Academy" in text
+          link = re.search(r"/invitations/accept#token=([A-Za-z0-9_-]{43})", text)
+          assert link, "no invitation link (token in the URL fragment) in the email"
+          token = link[1]
+
+          def call(method, path, body=None, bearer=None):
+              headers = {"Host": host, "X-Forwarded-Proto": "https", "Content-Type": "application/json"}
+              if bearer:
+                  headers["Authorization"] = f"Bearer {bearer}"
+              data = json.dumps(body).encode() if body is not None else None
+              request = urllib.request.Request(f"{base}{path}", data=data, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      return response.status, dict(response.headers), json.load(response)
+              except urllib.error.HTTPError as exc:
+                  return exc.code, dict(exc.headers), json.load(exc)
+
+          status, headers, preview = call("GET", f"/api/v1/invitations/{token}/")
+          print(f"preview -> {status} (expected 200), next step {preview.get('next_step')}")
+          assert status == 200 and preview["organization_name"] == "CI Academy"
+          assert preview["email"] != owner and preview["email"].endswith("@ci-academy.example.org")
+          assert headers.get("Cache-Control") == "no-store, private"
+          assert headers.get("Referrer-Policy") == "no-referrer"
+
+          password = "Ci-Owner-Passphrase-2026"
+          status, _, accepted = call(
+              "POST", f"/api/v1/invitations/{token}/accept/", {"full_name": "CI Owner", "password": password}
+          )
+          print(f"accept -> {status} (expected 200), organization {accepted.get('organization', {}).get('status')}")
+          assert status == 200 and accepted["organization"]["status"] == "active"
+          assert [r["system_key"] for r in accepted["roles"]] == ["owner"]
+          org_id = accepted["organization"]["id"]
+
+          reused, _, body = call("POST", f"/api/v1/invitations/{token}/accept/", {"full_name": "X", "password": password})
+          print(f"reuse -> {reused} (expected 404 {body.get('code')})")
+          assert reused == 404
+
+          status, _, login = call("POST", "/api/v1/auth/login/", {"email": owner, "password": password})
+          assert status == 200
+          status, _, me = call("GET", f"/api/v1/organizations/{org_id}/me/", bearer=login["access_token"])
+          print(f"owner GET me/ -> {status} (expected 200), roles {[r['system_key'] for r in me['roles']]}")
+          assert status == 200 and [r["system_key"] for r in me["roles"]] == ["owner"]
+          PY
+          as_app() {
+            docker exec -e PGPASSWORD=ci-only-app-password aems-db psql -h localhost -U aems_app -d aems -v ON_ERROR_STOP=1 -tAc "$1"
+          }
+          test "$(as_app "SELECT status FROM organizations_organization WHERE slug = 'ci-academy'")" = active
+          test "$(as_app "SELECT status FROM organizations_invitation WHERE email = 'owner@ci-academy.example.org'")" = accepted
+          for action in invitation.initial_owner_issued invitation.email_delivered invitation.accepted rbac.owner.granted organization.activated; do
+            test "$(as_app "SELECT count(*) FROM audit_auditlog WHERE action = '$action'")" -ge 1
+          done
+          # The accepted invitation is immutable, and the database never held the raw token.
+          if out="$(as_app "UPDATE organizations_invitation SET status = 'pending', accepted_at = NULL, accepted_by_id = NULL" 2>&1)"; then
+            echo "Accepted invitation was reopened"; exit 1
+          fi
+          grep -q "can no longer change" <<<"$out"
+          echo "Organization activated by the initial Owner invitation; invitation single-use and immutable"
 
       - name: Show container logs
         if: always()
