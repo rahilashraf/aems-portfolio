@@ -1,9 +1,9 @@
 """Fixtures for organization and tenant-isolation tests.
 
 **Test-only activation.** Production code has no way to make an organization ``active``: that
-happens when the initial Owner accepts their invitation (Batch 7), and the Owner role arrives in
-Batch 6. Tests that need an active organization use :func:`activate_for_tests`, which writes the
-status directly with a queryset update. It lives only in this test package and must never be
+happens when the initial Owner accepts their invitation (Batch 7). Tests that need an active
+organization use :func:`activate_for_tests`, which writes the status directly with a queryset
+update. It lives only in this test package and must never be
 imported by application code (asserted by ``test_activation_helper_is_test_only``).
 """
 
@@ -25,6 +25,7 @@ from apps.organizations.models import (
     OrganizationStatus,
     OrganizationType,
 )
+from apps.rbac.services import seed_system_roles
 
 
 def activate_for_tests(organization: Organization) -> Organization:
@@ -58,6 +59,12 @@ class Api:
 
     def patch(self, path: str, data: Any = None) -> Any:
         return Client().patch(path, data or {}, content_type="application/json", **self.headers)
+
+    def put(self, path: str, data: Any = None) -> Any:
+        return Client().put(path, data or {}, content_type="application/json", **self.headers)
+
+    def delete(self, path: str) -> Any:
+        return Client().delete(path, **self.headers)
 
 
 @pytest.fixture
@@ -97,6 +104,7 @@ def make_org(platform_admin: User) -> Callable[..., Organization]:
         extra.setdefault("slug", f"org-{counter['n']}")
         extra.setdefault("organization_type", OrganizationType.SCHOOL)
         organization = Organization.objects.create(created_by=platform_admin, **extra)
+        seed_system_roles(organization)  # as create_organization() does
         if status == OrganizationStatus.ACTIVE:
             activate_for_tests(organization)
         elif status != OrganizationStatus.PROVISIONING:

@@ -27,6 +27,7 @@ from django.utils import timezone
 
 from apps.audit import services as audit
 from apps.core.net import client_ip
+from apps.rbac.services import deactivation_blockers
 
 from . import ratelimit
 from .models import AuthSession, RevokeReason, User
@@ -128,6 +129,19 @@ class UserChangeForm(forms.ModelForm):  # type: ignore[type-arg]
         if User.objects.filter(email=email).exclude(pk=self.instance.pk).exists():
             raise ValidationError("An account with this email address already exists.")
         return email
+
+    def clean_is_active(self) -> bool:
+        """Early feedback for the Owner invariant; ``deactivate_user`` re-checks under lock."""
+        is_active = bool(self.cleaned_data.get("is_active"))
+        if self.instance.pk and self.instance.is_active and not is_active:
+            blocking = deactivation_blockers(self.instance)
+            if blocking:
+                raise ValidationError(
+                    "This account is the last active Owner of %(count)d organization(s): "
+                    "%(organizations)s. Assign another Owner first.",
+                    params={"count": len(blocking), "organizations": ", ".join(blocking)},
+                )
+        return is_active
 
 
 # The administrator performing the current admin password change. Django builds the password form

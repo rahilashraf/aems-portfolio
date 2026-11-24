@@ -1,8 +1,8 @@
 """Organizations and memberships (Batch 4; ADR-0003, ADR-0005, ADR-0015).
 
 Users are global (``accounts.User``). A user's relationship to an organization is a
-:class:`Membership`, which is tenant-owned. Roles (``MembershipRole``) and invitations arrive in
-Batches 6 and 7.
+:class:`Membership`, which is tenant-owned. Its roles are ``rbac.MembershipRole`` rows (Batch 6);
+invitations arrive in Batch 7.
 """
 
 from typing import Any, ClassVar
@@ -119,6 +119,11 @@ class Membership(TenantScopedModel):
     class Meta:
         constraints: ClassVar[list[Any]] = [
             models.UniqueConstraint(fields=["organization", "user"], name=MEMBERSHIP_UNIQUE),
+            # Target of the composite foreign key from rbac.MembershipRole (Batch 6): a role
+            # assignment must reference a membership of its own organization.
+            models.UniqueConstraint(
+                fields=["id", "organization"], name="organizations_membership_id_org_uniq"
+            ),
             models.CheckConstraint(
                 condition=models.Q(status__in=MembershipStatus.values),
                 name="organizations_membership_status_valid",

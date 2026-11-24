@@ -19,6 +19,7 @@ from typing import Any
 from django.db import IntegrityError, transaction
 
 from apps.audit import services as audit
+from apps.rbac import services as rbac
 
 from .exceptions import OrganizationSlugTakenError, OrganizationStatusTransitionError
 from .models import ORGANIZATION_SLUG_UNIQUE, Organization, OrganizationStatus
@@ -59,6 +60,8 @@ def create_organization(
     try:
         with transaction.atomic():
             organization.save(force_insert=True)
+            # Role definitions only: nobody becomes an Owner and the status stays provisioning.
+            rbac.seed_system_roles(organization)
             audit.record(
                 "organization.created",
                 actor=actor,
@@ -133,15 +136,17 @@ def update_organization(
 def update_organization_profile(
     *, actor: Any, organization: Organization, changes: dict[str, Any], client_ip: str | None = None
 ) -> Organization:
-    """An organization editing its own profile.
+    """An organization editing its own profile (``PATCH /organizations/{org_id}/``).
 
-    Exposed at ``PATCH /organizations/{org_id}/`` only behind the ``organization.update``
-    permission, which cannot be granted until Batch 6, so the endpoint currently fails closed.
+    The actor's ``organization.update`` permission is re-checked from current database state
+    after the organization row is locked, so a permission revoked while the request was in flight
+    cannot be used (ADR-0017).
     """
     with transaction.atomic():
         locked = Organization.objects.select_for_update().get(pk=organization.pk)
         if locked.status != OrganizationStatus.ACTIVE:
             raise OrganizationStatusTransitionError()
+        rbac.require_fresh_permission(locked, actor, "organization.update")
         changed = _apply_changes(locked, changes, TENANT_EDITABLE_FIELDS)
         _save(locked, list(changed))
         if changed:

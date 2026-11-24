@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from apps.core.api.permissions import iter_url_patterns
 from apps.organizations.permissions import HasOrgPermission, IsPlatformAdministrator
 from apps.organizations.scoping import ORGANIZATION_URL_KWARG, OrganizationScopedViewMixin
+from apps.rbac.registry import registry
 
 HANDLERS = ("get", "post", "put", "patch", "delete")
 TENANT_PREFIX = "api/v1/organizations/"
@@ -51,6 +52,12 @@ def test_inventory_is_complete() -> None:
         "api/v1/organizations/<uuid:org_id>/",
         "api/v1/organizations/<uuid:org_id>/me/",
         "api/v1/organizations/<uuid:org_id>/audit-logs/",
+        "api/v1/organizations/<uuid:org_id>/members/",
+        "api/v1/organizations/<uuid:org_id>/members/<uuid:membership_id>/",
+        "api/v1/organizations/<uuid:org_id>/members/<uuid:membership_id>/roles/",
+        "api/v1/organizations/<uuid:org_id>/roles/",
+        "api/v1/organizations/<uuid:org_id>/roles/<uuid:role_id>/",
+        "api/v1/organizations/<uuid:org_id>/permissions/",
     }
     assert {r[0] for r in PLATFORM_ROUTES} == {
         "api/v1/platform/organizations/",
@@ -90,6 +97,19 @@ def test_tenant_routes_use_the_approved_infrastructure(
             assert handler in member_actions or required.get(handler), (route, handler)
     # Never public.
     assert name is None or not str(name).endswith(tuple(settings.API_PUBLIC_ENDPOINTS))
+
+
+@pytest.mark.parametrize(
+    ("route", "name", "view"), TENANT_ROUTES, ids=[r[0] for r in TENANT_ROUTES]
+)
+def test_declared_permissions_are_registered_catalog_codes(
+    route: str, name: str | None, view: type[APIView]
+) -> None:
+    """A typo or an unregistered code would silently deny forever: fail CI instead."""
+    for handler, codes in getattr(view, "required_permissions", {}).items():
+        assert handler in HANDLERS, (route, handler)
+        for code in codes:
+            assert registry.is_active(code), (route, handler, code)
 
 
 @pytest.mark.parametrize(

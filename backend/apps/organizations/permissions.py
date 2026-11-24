@@ -1,6 +1,4 @@
-"""Authorization for organization APIs (Batch 4; ADR-0015).
-
-Batch 4 has no RBAC engine. Authorization is therefore:
+"""Authorization for organization APIs (ADR-0015, ADR-0017).
 
 - **Platform administration**: :class:`IsPlatformAdministrator` - an active staff account that
   also holds the matching Django model permission (``organizations.view_organization``,
@@ -8,10 +6,9 @@ Batch 4 has no RBAC engine. Authorization is therefore:
   status never implies tenant membership.
 - **Tenant endpoints**: ``OrganizationScopedViewMixin`` first resolves an active membership in an
   active organization (404 otherwise), then :class:`HasOrgPermission` applies per-action
-  declarations with default deny. Membership alone authorizes only declared read-only actions; in
-  Batch 4 **every** permission-gated action is denied because there are no roles to grant
-  permissions. Batch 6 replaces :func:`membership_has_permissions` with the RBAC engine; views do
-  not change.
+  declarations with default deny. Membership alone authorizes only declared read-only actions;
+  every other action requires organization permissions, evaluated by the RBAC engine
+  (:mod:`apps.rbac.engine`, Batch 6) from the membership's roles in that organization.
 """
 
 from collections.abc import Iterable
@@ -19,6 +16,8 @@ from typing import Any
 
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.request import Request
+
+from apps.rbac import engine
 
 from .models import Membership
 
@@ -54,11 +53,12 @@ def _membership(request: Request) -> Membership | None:
 
 
 def membership_has_permissions(membership: Membership, permissions: Iterable[str]) -> bool:
-    """Batch 6 integration point: evaluate organization permissions for a membership.
+    """Evaluate organization permissions for the request's membership (RBAC engine).
 
-    There are no roles before Batch 6, so no permission can be held: fail closed.
+    Unknown or deprecated codes are never held. The result is cached on the membership instance,
+    which the tenant API resolves anew for every request.
     """
-    return False
+    return engine.has_permissions(membership, permissions)
 
 
 class HasOrgPermission(BasePermission):
@@ -70,7 +70,7 @@ class HasOrgPermission(BasePermission):
       organization profile). Honoured **only for safe methods**, so membership alone can never
       authorize a write.
     - ``required_permissions``: ``{"patch": ("organization.update",)}``. Every listed permission is
-      required. In Batch 4 none can be held (no roles), so these actions fail closed.
+      required, evaluated for this organization only.
     - Anything not declared is denied.
     """
 

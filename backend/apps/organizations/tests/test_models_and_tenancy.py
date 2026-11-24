@@ -224,12 +224,16 @@ class TestTenantScopedModel:
             organization.delete()
 
     def test_activation_helper_is_test_only(self) -> None:
-        """No application module references the test-only activation helper."""
+        """No application module uses the test-only activation or role-assignment helpers."""
         app_root = pathlib.Path(__file__).resolve().parents[2]
         offenders = [
             str(path)
             for path in app_root.rglob("*.py")
-            if "tests" not in path.parts and "activate_for_tests" in path.read_text()
+            if "tests" not in path.parts
+            and any(
+                marker in path.read_text()
+                for marker in ("activate_for_tests", "rbac.tests", "organizations.tests")
+            )
         ]
         assert offenders == []
 
@@ -255,19 +259,30 @@ class TestSelectorsAndServices:
         assert list(memberships_for_user(user)) == []
         assert str(membership) == f"Membership {membership.pk}"
 
-    def test_profile_update_service_for_batch_6(
+    def test_profile_update_service(
         self,
         make_org: Callable[..., Organization],
+        make_user: Callable[..., User],
         platform_admin: User,
         django_capture_on_commit_callbacks: Any,
     ) -> None:
+        from apps.rbac.exceptions import RbacForbiddenError  # noqa: PLC0415
+        from apps.rbac.models import MembershipRole, Role  # noqa: PLC0415
+
         captured: list[Any] = []
         unregister = security_events.register_sink(captured.append)
         try:
             organization = make_org()
+            owner = make_user()
+            membership = add_member(organization, owner)
+            MembershipRole(
+                organization=organization,
+                membership=membership,
+                role=Role.objects.get(organization=organization, system_key="owner"),
+            ).save()
             with django_capture_on_commit_callbacks(execute=True):
                 updated = update_organization_profile(
-                    actor=platform_admin,
+                    actor=owner,
                     organization=organization,
                     changes={"name": "Renamed", "timezone": "Europe/Paris"},
                 )
@@ -276,11 +291,16 @@ class TestSelectorsAndServices:
             assert event.metadata["changed_fields"] == ["name", "timezone"]
             with pytest.raises(ValueError, match="status"):
                 update_organization_profile(
-                    actor=platform_admin, organization=organization, changes={"status": "active"}
+                    actor=owner, organization=organization, changes={"status": "active"}
                 )
             with pytest.raises(ValidationError):
                 update_organization_profile(
-                    actor=platform_admin, organization=organization, changes={"timezone": "Nowhere"}
+                    actor=owner, organization=organization, changes={"timezone": "Nowhere"}
+                )
+            # Platform administrators hold no tenant permission.
+            with pytest.raises(RbacForbiddenError):
+                update_organization_profile(
+                    actor=platform_admin, organization=organization, changes={"name": "x"}
                 )
             pending = make_org(OrganizationStatus.PROVISIONING)
             with pytest.raises(OrganizationStatusTransitionError):

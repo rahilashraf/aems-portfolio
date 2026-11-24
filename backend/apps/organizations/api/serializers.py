@@ -93,8 +93,16 @@ class MyOrganizationSerializer(serializers.Serializer[Any]):
     membership = MembershipSummarySerializer(source="*", read_only=True)
 
 
+class MyRoleSerializer(serializers.Serializer[Any]):
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(read_only=True)
+    system_key = serializers.CharField(read_only=True, allow_null=True)
+
+
 class OrganizationMembershipSerializer(serializers.Serializer[Any]):
-    """``GET /organizations/{org_id}/me/``. Roles and permissions are added in Batch 6."""
+    """``GET /organizations/{org_id}/me/``: membership, roles and effective permissions."""
 
     organization = OrganizationSerializer(read_only=True)
-    membership = MembershipSummarySerializer(source="*", read_only=True)
+    membership = MembershipSummarySerializer(read_only=True)
+    roles = MyRoleSerializer(many=True, read_only=True)
+    permissions = serializers.ListField(child=serializers.CharField(), read_only=True)

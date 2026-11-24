@@ -17,6 +17,7 @@ from rest_framework import exceptions
 
 from apps.audit import services as audit
 from apps.core.api.exceptions import DomainError
+from apps.rbac import services as rbac
 
 from . import ratelimit
 from .models import AuthSession, RevokeReason, User
@@ -323,17 +324,18 @@ def update_profile(user: User, changes: dict[str, Any], *, client_ip: str | None
 
 # --------------------------------------------------------------------------- deactivation
 def deactivate_user(user: User, *, actor: User | None = None) -> int:
-    """Deactivate an account and revoke all of its sessions in one transaction.
+    """Deactivate an account and revoke all of its sessions in one transaction (plan §6.3).
 
-    Batch 6 requirement: before ``is_active`` is cleared, lock every active organization in which
-    the
-    user is an active Owner (ascending id) and refuse if any would be left without another active
-    Owner (plan §6.3). Until organizations exist there is no owner invariant to enforce.
+    Lock order: the user row, then every organization in which the user has a membership
+    (ascending id, :func:`apps.rbac.services.assert_deactivation_keeps_owners`). If the user is
+    the last active Owner of any active organization, ``LastOwnerError`` (409) lists every
+    blocking organization and nothing changes anywhere. Platform administrators get no bypass.
     """
     with transaction.atomic():
         locked = User.objects.select_for_update().get(pk=user.pk)
         was_active = locked.is_active
         if was_active:
+            rbac.assert_deactivation_keeps_owners(locked)
             locked.is_active = False
             locked.save(update_fields=["is_active"])
         revoked = revoke_user_sessions(locked, RevokeReason.DEACTIVATED, actor=actor)

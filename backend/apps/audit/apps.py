@@ -11,8 +11,11 @@ class AuditConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
 
     def ready(self) -> None:
+        from apps.rbac.catalog import register_audit_permissions  # noqa: PLC0415
+
         from .privileges import grant_runtime_privileges_after_migrate  # noqa: PLC0415
 
+        register_audit_permissions()
         post_migrate.connect(
             grant_runtime_privileges_after_migrate,
             sender=self,
