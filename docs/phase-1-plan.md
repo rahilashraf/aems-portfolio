@@ -667,8 +667,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 | 2 — Core infrastructure & CI | Merged | rahilashraf/aems-portfolio#2 | Review findings AEMS-007…009 resolved before merge |
 | 3 — Accounts & authentication | Merged | rahilashraf/aems-portfolio#4 | Review findings AEMS-010/011 and the password-reset outbox resolved before merge |
 | 4 — Organizations & tenancy | Merged | rahilashraf/aems-portfolio#5 | Review findings AEMS-012…014 resolved before merge |
-| 5 — Audit logging | In review | (this batch) | See Batch 5 deviations below |
-| 6–8 | Not started | — | — |
+| 5 — Audit logging | Merged | rahilashraf/aems-portfolio#6 | Review findings AEMS-015/016 resolved before merge |
+| 6 — RBAC | In review | (this batch) | See Batch 6 deviations below |
+| 7–8 | Not started | — | — |
 
 ### Batch 2 deviations from the original plan
 
@@ -771,3 +772,32 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 - **Saving an audit row twice** raises; `bulk_create` is disabled for audit rows.
 - **Deferred:** retention, archival, hash chaining; database-level protection against the owner
   or superusers.
+
+### Batch 6 deviations and clarifications (ADR-0017)
+
+- **`MembershipRole` lives in `apps.rbac`** (§5.3 placed it in `organizations`). Composite foreign
+  keys on `(id, organization_id)` make a cross-tenant assignment impossible even with raw SQL.
+- **Permission rows are protected in the database:** codes are immutable and rows cannot be
+  deleted; retired codes are deprecated and grant nothing.
+- **Organization profile and `me/` stay member actions** (Batch 4 declarations preserved).
+  `organization.view` is registered and granted to Admin and Member by default, but gates no
+  endpoint yet. This needs a review decision.
+- **Delegation is broader than §6.4:**
+  - suspending, reactivating or removing a member requires holding every permission the member's
+    roles confer;
+  - only Owners can change an Owner's membership.
+- **Assigned custom roles cannot be deleted** (`409 role_in_use`), rather than being silently
+  removed from members.
+- **Global deactivation locks every organization in which the user has a membership** (ascending
+  id), not only those where the user is an Owner. This closes a window in which the user becomes
+  Owner elsewhere. Global lock order: user → organizations → memberships → roles.
+- **Existing organizations** receive the system role definitions by migration. No membership is
+  given a role, and no organization changes status.
+- **Not added in Batch 6:**
+  - platform RBAC endpoints;
+  - `suspended → active` reactivation (still rejected);
+  - self-service leaving of an organization.
+- **Batch 7 must:**
+  - lock the accepting user row before the organization row;
+  - apply the delegation rules to roles carried by invitations;
+  - assign the initial Owner and activate the organization in one transaction.

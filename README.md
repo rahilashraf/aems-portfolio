@@ -4,7 +4,7 @@ AEMS is a multi-organization SaaS platform for schools, universities, and traini
 supporting online and paper-based examinations with strict tenant isolation and customizable,
 organization-scoped roles and permissions.
 
-> **Status:** Phase 1 — Backend Foundation, Batch 5 (durable audit logging).
+> **Status:** Phase 1 — Backend Foundation, Batch 6 (organization roles and permissions).
 > See the [Phase 1 plan](docs/phase-1-plan.md) and [Architecture Decision Records](docs/adr/README.md).
 
 ## Technology
@@ -158,6 +158,7 @@ The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the A
 | `/api/v1/auth/...` | Authentication, profile, passwords and sessions (see below) | Mixed |
 | `/api/v1/organizations/...` | The caller's organizations and tenant APIs (see below) | Bearer + membership |
 | `/api/v1/platform/organizations/...` | Organization administration (see below) | Platform administrators |
+| `/api/v1/organizations/{org_id}/members/`, `roles/`, `permissions/` | Members, roles and the permission catalog (see below) | Organization permissions |
 | `/api/v1/organizations/{org_id}/audit-logs/`, `/api/v1/platform/audit-logs/` | Audit history (see below) | `audit.view` / platform auditors |
 | `GET /api/schema/` | OpenAPI 3 schema | Public when `API_DOCS_ENABLED`; always 404 in production |
 | `GET /api/docs/`, `GET /api/redoc/` | Swagger UI / ReDoc | Same as above |
@@ -245,21 +246,21 @@ organizations ([ADR-0003](docs/adr/0003-tenant-isolation.md),
   unknown organization, another tenant's organization, a provisioning or suspended organization,
   a suspended membership and a platform administrator without a membership all receive the
   **same 404**.
-- **Authorization is default deny.** Members may use declared read-only actions. Anything else
-  needs an organization permission. Organization roles arrive in Batch 6, so until then
-  permission-gated actions answer 403.
+- **Authorization is default deny.** Members may use declared read-only actions (the profile and
+  `me/`). Anything else needs an organization permission granted by the member's roles in that
+  organization (see [Roles and permissions](#roles-and-permissions)).
 - **Lifecycle.** New organizations start in `provisioning` and are closed to tenant APIs. They
   become `active` only when an initial Owner accepts an invitation (Batch 7); there is **no manual
   activation**. Platform administrators can suspend an active organization, which closes its
-  tenant APIs immediately. Reactivation needs a verified Owner (Batches 6/7).
+  tenant APIs immediately. Reactivation is not available yet (it needs a verified Owner).
 - **Row-level security** is deferred to Phase 2, behind a security review (ADR-0003).
 
 | Endpoint | Purpose | Access |
 |---|---|---|
 | `GET /api/v1/organizations/` | My organizations: active memberships in active organizations | Bearer |
 | `GET /api/v1/organizations/{org_id}/` | Organization profile | Active member |
-| `PATCH /api/v1/organizations/{org_id}/` | Update `name`/`timezone` | Requires `organization.update` (403 until Batch 6) |
-| `GET /api/v1/organizations/{org_id}/me/` | My membership in the organization | Active member |
+| `PATCH /api/v1/organizations/{org_id}/` | Update `name`/`timezone` | `organization.update` |
+| `GET /api/v1/organizations/{org_id}/me/` | My membership, roles and effective permissions | Active member |
 | `GET`, `POST /api/v1/platform/organizations/` | List (filter `status`, `organization_type`; order `name`, `slug`, `created_at`, `status`) or create (`name`, `slug`, `organization_type`, `timezone`) | Platform administrator |
 | `GET`, `PATCH /api/v1/platform/organizations/{id}/` | Retrieve or update (`name`, `organization_type`, `timezone`, `status`: `active` → `suspended` only) | Platform administrator |
 
@@ -267,7 +268,7 @@ A **platform administrator** is an active staff account holding the matching Dja
 (`organizations.view_organization`, `add_organization` or `change_organization`; superusers hold
 all). Grant these in the admin. Platform administration gives no access to tenant data.
 
-Deferred routes: members, roles and permissions (Batch 6); invitations (Batch 7).
+Deferred routes: invitations (Batch 7).
 
 **Writing tenant endpoints.** Subclass `OrganizationScopedViewMixin` before the base view. Set
 `tenant_model` and `permission_classes = [HasOrgPermission]`, and declare `member_actions`
@@ -278,6 +279,52 @@ meta-test (`apps/organizations/tests/test_route_coverage.py`) fails for routes t
 **Tests.** `apps/organizations/tests/` contains the tenant-isolation matrix and the route
 meta-test. Active organizations in tests come from a test-only fixture, because production code
 cannot activate one.
+
+## Roles and permissions
+
+Each organization has its own roles ([ADR-0005](docs/adr/0005-rbac-and-ownership-invariants.md),
+[ADR-0017](docs/adr/0017-organization-rbac-implementation.md)). A user can hold different roles
+in different organizations, and a role never grants anything in another organization. Django's
+global groups and staff permissions play no part.
+
+- **Permission catalog** (registered in code, synced after every `migrate`): `organization.view`,
+  `organization.update`, `members.view`, `members.manage`, `invitations.manage` (Batch 7),
+  `roles.view`, `roles.manage`, `audit.view`. Codes are immutable; retired codes are deprecated,
+  never deleted, and grant nothing.
+- **System roles**, seeded for every organization:
+  - **Owner** holds every permission, including ones added later, and cannot be edited or
+    deleted;
+  - **Admin** (default: all permissions) and **Member** (default: `organization.view`) have
+    editable permissions but fixed names.
+
+  Custom roles can hold any catalog permissions.
+- **Owner invariant.** An active organization always keeps at least one active Owner. Suspending
+  or removing a member, removing the Owner role and deactivating an account (also from the staff
+  admin) are refused with `409 last_owner` when they would break it.
+- **Escalation rules.**
+  - Nobody can change their own status or roles; an Owner may give up the Owner role while
+    another Owner remains.
+  - You can only grant, remove or act on permissions you hold, including through a role you hold
+    yourself.
+  - Only Owners grant or remove the Owner role or change an Owner.
+- **Concurrency.** Every change locks the organization row and re-checks the actor's
+  permissions from the database before applying anything, so a permission revoked mid-request
+  cannot be used. Lock order: user → organizations (ascending id) → memberships (ascending id).
+- **Audit.** Every change is recorded in the same transaction (`rbac.*` events).
+
+| Endpoint | Purpose | Permission |
+|---|---|---|
+| `GET /api/v1/organizations/{org_id}/members/` | List members with their roles (filter `status`, order `joined_at`) | `members.view` |
+| `GET /api/v1/organizations/{org_id}/members/{id}/` | One member | `members.view` |
+| `PATCH /api/v1/organizations/{org_id}/members/{id}/` | `status`: `active` or `suspended` | `members.manage` |
+| `DELETE /api/v1/organizations/{org_id}/members/{id}/` | Remove the membership (the account is kept) | `members.manage` |
+| `PUT /api/v1/organizations/{org_id}/members/{id}/roles/` | Replace the member's roles (`role_ids`) | `members.manage` + delegation/Owner rules |
+| `GET`, `POST /api/v1/organizations/{org_id}/roles/` | List (filter `is_system`, order `name`, `created_at`) or create (`name`, `description`, `permissions`) | `roles.view` / `roles.manage` |
+| `GET`, `PATCH`, `DELETE /api/v1/organizations/{org_id}/roles/{id}/` | Read, edit or delete a role (assigned and system roles cannot be deleted) | `roles.view` / `roles.manage` |
+| `GET /api/v1/organizations/{org_id}/permissions/` | Assignable catalog permissions | `roles.view` |
+
+Organizations created before Batch 6 receive the three system roles by migration, but nobody is
+made an Owner: Owners come from an existing Owner or, in Batch 7, the initial Owner invitation.
 
 ## Audit log
 
@@ -304,7 +351,7 @@ Security-relevant actions are stored in an append-only `AuditLog`
 
 | Endpoint | Returns | Access |
 |---|---|---|
-| `GET /api/v1/organizations/{org_id}/audit-logs/` | The organization's events. Filters: `action`, `actor`, `outcome`, `created_after`, `created_before`; cursor pagination, newest first | Non-members: 404. Members need `audit.view`: **403 until Batch 6 roles** |
+| `GET /api/v1/organizations/{org_id}/audit-logs/` | The organization's events. Filters: `action`, `actor`, `outcome`, `created_after`, `created_before`; cursor pagination, newest first | Non-members: 404. Members need `audit.view` (Owner; Admin by default; any role granting it) |
 | `GET /api/v1/platform/audit-logs/` | Events without an organization (accounts, authentication, platform actions, denied tenant access); same filters | Active staff with `audit.view_auditlog` |
 
 Organization events, including changes made by platform staff, belong to that organization's

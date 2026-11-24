@@ -188,8 +188,9 @@ embedded credentials.
 - **Tenant:** `GET /api/v1/organizations/{org_id}/audit-logs/`.
   - Tenant resolution comes first: non-members, suspended or provisioning organizations and bad
     ids get 404, before any permission check.
-  - Then `HasOrgPermission` requires `audit.view`. Nobody can hold it before Batch 6 roles, so
-    members get **403**.
+  - Then `HasOrgPermission` requires `audit.view`. Nobody could hold it before Batch 6 roles;
+    since Batch 6 (ADR-0017) it is granted to Owners, to Admins by default and to any role that
+    includes it. Members without it get **403**.
   - Filters: `action`, `actor`, `outcome`, `created_after`, `created_before`.
   - Cursor pagination, newest first with an id tie-breaker; `page_size` up to 100.
   - The production view's scoping, filters and pagination are tested through a test-only route
@@ -199,11 +200,18 @@ embedded credentials.
   `audit.view_auditlog` model permission (`IsPlatformAuditor`). Organization administration
   permissions do not grant it, and there is no superuser tenant bypass.
 
-## Batch 6 integration
-- Define the `audit.view` organization permission in the catalog and grant it to Owner/Admin
-  roles. The endpoint then opens to holders with no view change.
-- Ownership-invariant mutations (roles, memberships, deactivation across organizations) must call
-  `audit.record` inside their locked transactions.
+## Batch 6 integration (done, ADR-0017)
+- `audit.view` is in the catalog; Owners hold it and the Admin role has it by default. The
+  endpoint opened with no view change.
+- Ownership-invariant mutations (roles, memberships, deactivation across organizations) call
+  `audit.record` inside their locked transactions. New events: `rbac.role.created`,
+  `rbac.role.updated`, `rbac.role.permissions_changed`, `rbac.role.deleted`,
+  `rbac.membership.status_changed`, `rbac.membership.removed`, `rbac.membership.roles_replaced`,
+  `rbac.owner.granted`, `rbac.owner.revoked`, `rbac.owner.relinquished`. They belong to the
+  organization's history.
+- Redaction allowlists gained `member_user_id`, `roles_added`, `roles_removed`,
+  `permissions_added`, `permissions_removed` (metadata) and `role.name`, `role.description`,
+  `membership.status` (changes).
 
 ## Consequences
 - **Durability:** every listed mutation commits with its audit row or not at all.

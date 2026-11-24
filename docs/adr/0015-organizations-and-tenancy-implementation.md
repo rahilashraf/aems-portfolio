@@ -120,6 +120,11 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
    `TenantScopedPrimaryKeyRelatedField`, which reports foreign ids exactly like nonexistent ones.
 
 ### Authorization until Batch 6
+
+> **Batch 6 update (ADR-0017).** `membership_has_permissions()` now evaluates the membership's
+> roles with the RBAC engine. The declarations below are unchanged: permission-gated actions are
+> allowed to members whose roles grant the permission in that organization.
+
 - **Platform administration** (`IsPlatformAdministrator`) requires all of:
   - an active account;
   - `is_staff`;
@@ -141,13 +146,13 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
 | `GET/POST /platform/organizations/`, `GET/PATCH /platform/organizations/{id}/` | Active |
 | `GET /organizations/` | Active: the caller's active memberships in active organizations only |
 | `GET /organizations/{org_id}/`, `GET /organizations/{org_id}/me/` | Active (any active member) |
-| `PATCH /organizations/{org_id}/` | Routed, requires `organization.update`: **403 until Batch 6** |
-| `members/`, `roles/`, `permissions/` | Deferred to Batch 6 |
+| `PATCH /organizations/{org_id}/` | Requires `organization.update` (active since Batch 6) |
+| `members/`, `roles/`, `permissions/` | Added in Batch 6; see ADR-0017 |
 | `invitations/`, `/invitations/{token}/…` | Deferred to Batch 7 |
-| `audit-logs/` | Added in Batch 5: requires `audit.view` (403 until Batch 6); see ADR-0016 |
+| `audit-logs/` | Added in Batch 5: requires `audit.view` (grantable since Batch 6); see ADR-0016 |
 
-`/organizations/{org_id}/me/` returns the organization and the membership. Roles and effective
-permissions are added in Batch 6.
+`/organizations/{org_id}/me/` returns the organization and the membership, and since Batch 6 the
+caller's roles and effective permissions.
 
 ### Enforcement tests
 - **Isolation matrix.** Seven caller types against five targets on every tenant route, plus a
@@ -177,13 +182,15 @@ security event without an organization.
 
 ## Batch 5–7 integration requirements
 - **Batch 5:** persist the events above, inside the transaction for mutations.
-- **Batch 6:**
-  - Implement roles, `MembershipRole` and the permission catalog.
-  - Replace `membership_has_permissions()` with the engine.
-  - Extend `/me/` with roles and effective permissions.
+- **Batch 6** (status per ADR-0017):
+  - Implement roles, `MembershipRole` and the permission catalog. *Done.*
+  - Replace `membership_has_permissions()` with the engine. *Done.*
+  - Extend `/me/` with roles and effective permissions. *Done.*
   - Add `members/` and `roles/`, and enforce the ownership invariant under lock, including in
-    `accounts.services.deactivate_user`.
-  - Gate `suspended → active` on an active Owner.
+    `accounts.services.deactivate_user`. *Done.*
+  - Gate `suspended → active` on an active Owner. *Not done:* reactivation stays rejected (409),
+    because Batch 6 did not authorize any new activation path. Reactivation remains a separate,
+    reviewed change.
 - **Batch 7:** invitations. Accepting an initial-Owner invitation creates the Owner membership and
   performs `provisioning → active` in one transaction. That is the only activation path.
 

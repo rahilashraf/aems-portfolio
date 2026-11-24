@@ -1,6 +1,7 @@
 # ADR-0005: Organization-scoped RBAC and ownership invariants
 
-- **Status:** Accepted
+- **Status:** Accepted; implemented by [ADR-0017](0017-organization-rbac-implementation.md)
+  (Batch 6)
 - **Date:** 2026-11-21
 
 ## Context
