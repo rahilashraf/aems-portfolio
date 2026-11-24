@@ -509,6 +509,29 @@ jobs:
           expect_error aems_owner ci-only-owner-password "DELETE FROM audit_auditlog" "append-only"
           echo "Runtime role cannot change audit history; the trigger stops the owner role too"
 
+      - name: RBAC catalog, system roles and database safeguards in the production database
+        run: |
+          as_role() {  # as_role <role> <password> <sql>: run SQL inside the database container
+            docker exec -e PGPASSWORD="$2" aems-db psql -h localhost -U "$1" -d aems -v ON_ERROR_STOP=1 -tAc "$3"
+          }
+          expect_error() {  # expect_error <role> <password> <sql> <expected message fragment>
+            if out="$(as_role "$1" "$2" "$3" 2>&1)"; then echo "Unexpectedly succeeded: $3"; exit 1; fi
+            echo "$1> $3 -> $out"
+            grep -q "$4" <<<"$out"
+          }
+          app=(aems_app ci-only-app-password)
+          # The migrate step synced the catalog; the organization created through the API has its
+          # system role definitions but nobody holds the Owner role (no activation shortcut).
+          test "$(as_role "${app[@]}" "SELECT count(*) FROM rbac_permission WHERE NOT is_deprecated")" = 8
+          roles="$(as_role "${app[@]}" "SELECT string_agg(r.system_key, ',' ORDER BY r.system_key) FROM rbac_role r JOIN organizations_organization o ON o.id = r.organization_id WHERE o.slug = 'ci-academy'")"
+          echo "ci-academy system roles: $roles"
+          test "$roles" = "admin,member,owner"
+          test "$(as_role "${app[@]}" "SELECT count(*) FROM rbac_membershiprole")" = 0
+          test "$(as_role "${app[@]}" "SELECT status FROM organizations_organization WHERE slug = 'ci-academy'")" = provisioning
+          expect_error "${app[@]}" "DELETE FROM rbac_permission" "cannot be deleted"
+          expect_error "${app[@]}" "UPDATE rbac_permission SET code = 'audit.read' WHERE code = 'audit.view'" "immutable"
+          echo "Catalog synced, roles seeded without an Owner, permission rows protected"
+
       - name: Show container logs
         if: always()
         run: docker logs aems-api 2>&1 | tail -n 100 || true

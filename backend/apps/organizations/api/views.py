@@ -5,11 +5,13 @@ Active routes:
 - Platform (staff + model permission): ``GET|POST /platform/organizations/``,
   ``GET|PATCH /platform/organizations/{id}/``.
 - Self: ``GET /organizations/`` (the caller's active memberships in active organizations).
-- Tenant (``OrganizationScopedViewMixin``): ``GET /organizations/{org_id}/``,
-  ``GET /organizations/{org_id}/me/`` (any active member), ``PATCH /organizations/{org_id}/``
-  (requires ``organization.update``: fails closed until Batch 6).
+- Tenant (``OrganizationScopedViewMixin``): ``GET /organizations/{org_id}/`` (requires
+  ``organization.view``), ``GET /organizations/{org_id}/me/`` (any active member),
+  ``PATCH /organizations/{org_id}/``
+  (requires ``organization.update``, re-checked in the service under the organization lock).
 
-Deferred: members, roles, permissions (Batch 6), invitations (Batch 7), audit logs (Batch 5).
+Members, roles and permissions live in :mod:`apps.rbac.api.views`; audit logs in
+:mod:`apps.audit.api.views`. Invitations arrive in Batch 7.
 """
 
 from typing import Any
@@ -23,6 +25,8 @@ from rest_framework.response import Response
 
 from apps.core.api.views import AemsGenericAPIView
 from apps.core.net import client_ip
+from apps.rbac import engine
+from apps.rbac.models import MembershipRole, Role
 
 from .. import selectors, services
 from ..models import Membership, Organization
@@ -154,13 +158,19 @@ class MyOrganizationListView(AemsGenericAPIView):
 # ---------------------------------------------------------------------------------- tenant
 class OrganizationDetailView(OrganizationScopedViewMixin, AemsGenericAPIView):
     permission_classes = [HasOrgPermission]
-    member_actions = ("get",)
-    required_permissions = {"patch": ("organization.update",)}
+    # AEMS-017: reading the profile needs organization.view (granted to the Member role by
+    # default). The caller's own membership stays available to every member at me/.
+    required_permissions = {"get": ("organization.view",), "patch": ("organization.update",)}
     serializer_class = s.OrganizationSerializer
 
     @extend_schema(
         operation_id="organizations_retrieve",
         summary="Get the organization",
+        description=(
+            "Requires the `organization.view` permission (held by the default Member, Admin and "
+            "Owner roles). Every active member can still read their own membership, roles and "
+            "permissions at `GET /organizations/{org_id}/me/`."
+        ),
         tags=[TENANT_TAG],
     )
     def get(self, request: Request, org_id: Any) -> Response:
@@ -170,14 +180,14 @@ class OrganizationDetailView(OrganizationScopedViewMixin, AemsGenericAPIView):
         operation_id="organizations_update",
         summary="Update the organization profile",
         description=(
-            "Requires the `organization.update` permission. Organization roles arrive in Batch 6; "
-            "until then no member holds it and this endpoint answers 403."
+            "Requires the `organization.update` permission. Editable: `name`, `timezone`. The "
+            "slug, type and status cannot be changed here."
         ),
         request=s.OrganizationProfileUpdateSerializer,
         responses={200: s.OrganizationSerializer},
         tags=[TENANT_TAG],
     )
-    def patch(self, request: Request, org_id: Any) -> Response:  # pragma: no cover - Batch 6
+    def patch(self, request: Request, org_id: Any) -> Response:
         serializer = s.OrganizationProfileUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         organization = services.update_organization_profile(
@@ -196,8 +206,22 @@ class OrganizationMembershipView(OrganizationScopedViewMixin, AemsGenericAPIView
 
     @extend_schema(
         operation_id="organizations_me_retrieve",
-        summary="My membership in the organization",
+        summary="My membership, roles and effective permissions in the organization",
         tags=[TENANT_TAG],
     )
     def get(self, request: Request, org_id: Any) -> Response:
-        return Response(s.OrganizationMembershipSerializer(self.membership).data)
+        links = MembershipRole.objects.for_organization(self.organization).filter(
+            membership=self.membership
+        )
+        roles = sorted((link.role for link in links.select_related("role")), key=_role_order)
+        data = {
+            "organization": self.organization,
+            "membership": self.membership,
+            "roles": roles,
+            "permissions": sorted(engine.effective_permissions(self.membership)),
+        }
+        return Response(s.OrganizationMembershipSerializer(data).data)
+
+
+def _role_order(role: Role) -> tuple[str, str]:
+    return (role.name, str(role.pk))

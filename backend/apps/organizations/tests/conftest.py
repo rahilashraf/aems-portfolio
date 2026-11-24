@@ -1,9 +1,9 @@
 """Fixtures for organization and tenant-isolation tests.
 
 **Test-only activation.** Production code has no way to make an organization ``active``: that
-happens when the initial Owner accepts their invitation (Batch 7), and the Owner role arrives in
-Batch 6. Tests that need an active organization use :func:`activate_for_tests`, which writes the
-status directly with a queryset update. It lives only in this test package and must never be
+happens when the initial Owner accepts their invitation (Batch 7). Tests that need an active
+organization use :func:`activate_for_tests`, which writes the status directly with a queryset
+update. It lives only in this test package and must never be
 imported by application code (asserted by ``test_activation_helper_is_test_only``).
 """
 
@@ -25,6 +25,8 @@ from apps.organizations.models import (
     OrganizationStatus,
     OrganizationType,
 )
+from apps.rbac.models import MembershipRole, Role, SystemRole
+from apps.rbac.services import seed_system_roles
 
 
 def activate_for_tests(organization: Organization) -> Organization:
@@ -58,6 +60,12 @@ class Api:
 
     def patch(self, path: str, data: Any = None) -> Any:
         return Client().patch(path, data or {}, content_type="application/json", **self.headers)
+
+    def put(self, path: str, data: Any = None) -> Any:
+        return Client().put(path, data or {}, content_type="application/json", **self.headers)
+
+    def delete(self, path: str) -> Any:
+        return Client().delete(path, **self.headers)
 
 
 @pytest.fixture
@@ -97,6 +105,7 @@ def make_org(platform_admin: User) -> Callable[..., Organization]:
         extra.setdefault("slug", f"org-{counter['n']}")
         extra.setdefault("organization_type", OrganizationType.SCHOOL)
         organization = Organization.objects.create(created_by=platform_admin, **extra)
+        seed_system_roles(organization)  # as create_organization() does
         if status == OrganizationStatus.ACTIVE:
             activate_for_tests(organization)
         elif status != OrganizationStatus.PROVISIONING:
@@ -111,6 +120,19 @@ def add_member(
     organization: Organization, user: User, status: str = MembershipStatus.ACTIVE
 ) -> Membership:
     return Membership.objects.create(organization=organization, user=user, status=status)
+
+
+def add_default_member(
+    organization: Organization, user: User, status: str = MembershipStatus.ACTIVE
+) -> Membership:
+    """TEST ONLY: a membership holding the default Member role (as real members do)."""
+    membership = add_member(organization, user, status)
+    MembershipRole(
+        organization=organization,
+        membership=membership,
+        role=Role.objects.get(organization=organization, system_key=SystemRole.MEMBER),
+    ).save()
+    return membership
 
 
 @dataclass
@@ -150,13 +172,13 @@ def world(
         platform_admin=platform_admin,
         outsider=make_user("outsider@example.org"),
     )
-    add_member(org_a, w.alice)
-    add_member(org_b, w.bob)
-    add_member(org_a, w.carol)
-    add_member(org_b, w.carol)
-    add_member(org_a, w.dave, MembershipStatus.SUSPENDED)
-    add_member(provisioning, w.erin)
-    add_member(suspended, w.erin)
+    add_default_member(org_a, w.alice)
+    add_default_member(org_b, w.bob)
+    add_default_member(org_a, w.carol)
+    add_default_member(org_b, w.carol)
+    add_default_member(org_a, w.dave, MembershipStatus.SUSPENDED)
+    add_default_member(provisioning, w.erin)
+    add_default_member(suspended, w.erin)
     return w
 
 

@@ -86,6 +86,13 @@ def _identifier_list(value: Any) -> list[str]:
     return [_identifier(item) for item in value]
 
 
+def _uuid_list(value: Any) -> list[str]:
+    if not isinstance(value, list | tuple) or len(value) > MAX_LIST_ITEMS:
+        msg = f"Expected a list of at most {MAX_LIST_ITEMS} UUIDs."
+        raise AuditDataError(msg)
+    return [_uuid(item) for item in value]
+
+
 def _reason(value: Any) -> str:
     return _text(str(value))
 
@@ -113,12 +120,20 @@ METADATA_FIELDS: dict[str, Validator] = {
     "attempt": _non_negative_int,
     "category": _identifier,
     "retry_scheduled": _bool,
+    # RBAC (Batch 6): identifiers and catalog codes only.
+    "member_user_id": _uuid,
+    "roles_added": _uuid_list,
+    "roles_removed": _uuid_list,
+    "permissions_added": _identifier_list,
+    "permissions_removed": _identifier_list,
 }
 
 #: Fields whose changes may be recorded, per target type.
 CHANGE_FIELDS: dict[str, frozenset[str]] = {
     "organization": frozenset({"name", "organization_type", "timezone", "status"}),
     "user": frozenset({"full_name", "is_active", "is_staff", "is_superuser", "password"}),
+    "role": frozenset({"name", "description"}),
+    "membership": frozenset({"status"}),
 }
 #: Recorded as {"changed": true}: the values never reach the audit table.
 SENSITIVE_CHANGE_FIELDS = frozenset({"password"})

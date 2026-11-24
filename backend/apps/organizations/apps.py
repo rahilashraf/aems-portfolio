@@ -8,3 +8,8 @@ class OrganizationsConfig(AppConfig):
     label = "organizations"
     verbose_name = "Organizations"
     default_auto_field = "django.db.models.BigAutoField"
+
+    def ready(self) -> None:
+        from apps.rbac.catalog import register_organization_permissions  # noqa: PLC0415
+
+        register_organization_permissions()

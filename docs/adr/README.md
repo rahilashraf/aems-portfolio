@@ -11,7 +11,7 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0002](0002-repository-and-application-architecture.md) | Repository and application architecture | Accepted |
 | [0003](0003-tenant-isolation.md) | Tenant isolation: shared schema, organization-scoped rows | Accepted |
 | [0004](0004-authentication-and-session-management.md) | Authentication and session management | Accepted |
-| [0005](0005-rbac-and-ownership-invariants.md) | Organization-scoped RBAC and ownership invariants | Accepted |
+| [0005](0005-rbac-and-ownership-invariants.md) | Organization-scoped RBAC and ownership invariants | Accepted; implemented by 0017 |
 | [0006](0006-audit-logging.md) | Audit logging | Accepted |
 | [0007](0007-api-error-format.md) | API error format (RFC 9457) | Accepted; refined by 0009 |
 | [0008](0008-email-identity-normalization.md) | Email identity normalization and case-insensitive uniqueness | Accepted |
@@ -23,3 +23,4 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0014](0014-password-reset-email-outbox.md) | Password-reset email outbox | Accepted |
 | [0015](0015-organizations-and-tenancy-implementation.md) | Organizations and tenancy implementation | Accepted |
 | [0016](0016-durable-audit-logging.md) | Durable audit logging, database roles and audit APIs | Accepted |
+| [0017](0017-organization-rbac-implementation.md) | Organization RBAC implementation | Accepted |
