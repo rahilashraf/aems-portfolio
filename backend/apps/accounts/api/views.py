@@ -39,7 +39,7 @@ from apps.core.api.openapi import PROBLEM_401_EXTENSION
 from apps.core.api.permissions import PublicEndpoint
 from apps.core.api.views import AemsAPIView, AemsGenericAPIView
 from apps.core.net import client_ip
-from apps.core.security_events import record_security_event
+from apps.core.security_events import log_security_event
 
 from . import serializers as s
 
@@ -201,6 +201,10 @@ class LogoutView(PublicAuthView):
     the token's user (``sid`` + ``sub``). A client-supplied session id is never trusted on its own.
     The response is always 204 and the refresh cookie is always cleared (also when it is invalid
     or expired), so logout is idempotent and reveals nothing about the token.
+
+    Failure policy (ADR-0016): an actual revocation is recorded as ``auth.session.revoked`` in the
+    revocation's own transaction. If that audit insert fails, nothing is revoked and the error
+    response is returned instead of 204. Nothing durable is written after the revocation commits.
     """
 
     @extend_schema(
@@ -227,8 +231,13 @@ class LogoutView(PublicAuthView):
             session = _lenient_bearer_session(request)
         revoked = False
         if session is not None:
+            # Mandatory audit: the revocation and auth.session.revoked commit together. If the
+            # audit insert fails, the revocation rolls back and the error propagates (no 204).
             revoked = revoke_session(session, RevokeReason.LOGOUT, client_ip=ip)
-        record_security_event(
+        # Observational only: the durable record of the mutation is auth.session.revoked, and a
+        # logout that revokes nothing changes no state. Log sinks never raise, so nothing after
+        # the committed revocation can turn it into an error response.
+        log_security_event(
             "auth.logout",
             outcome="success",
             user_id=session.user_id if session is not None else None,
@@ -263,8 +272,10 @@ class MeView(AemsAPIView):
     def patch(self, request: Request) -> Response:
         serializer = s.ProfileUpdateSerializer(_user(request), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(s.UserSerializer(_user(request)).data)
+        user = services.update_profile(
+            _user(request), dict(serializer.validated_data), client_ip=client_ip(request)
+        )
+        return Response(s.UserSerializer(user).data)
 
 
 class PasswordChangeView(AemsAPIView):
@@ -417,5 +428,6 @@ class RevokeOtherSessionsView(AemsAPIView):
                 RevokeReason.OTHER_SESSIONS_REVOKED,
                 except_session_id=context.session.id,
                 client_ip=client_ip(request),
+                actor=context.user,
             )
         return Response({"revoked": revoked})

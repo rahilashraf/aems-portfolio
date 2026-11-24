@@ -1,26 +1,18 @@
-"""Security event interface (ADR-0013).
+"""Structured security logging (``aems.security``): the operational log of audited events.
 
-A narrow, stable interface through which security-relevant actions are reported. Batch 3 records
-events as structured log entries (logger ``aems.security``). Batch 5 adds durable, transactional
-persistence (``AuditLog``) behind the same interface **without changing call sites**.
+This module only **logs**. Durable, queryable audit records are written by the audit service
+(:mod:`apps.audit.services`, ADR-0016), which calls :func:`emit_after_commit` or :func:`emit` once
+its row is safely stored. The log is never the system of record, so:
 
-Conventions
------------
-- Event names are dotted, lowercase, past tense: ``auth.login.succeeded``,
-  ``auth.refresh.reuse_detected``. ``outcome`` is ``"success"`` or ``"failure"``.
-- Events carry identifiers, never secrets or raw personal data: ``user_id``, ``session_id``,
-  ``client_ip`` and an optional ``subject_digest`` (HMAC of an identifier such as a submitted email
-  for unknown accounts). Passwords, tokens and hashes are never included (they are also redacted by
-  the logging pipeline as a safety net).
-- **Mutation events** (something changed: login session created, password changed, session revoked)
-  use :func:`record_after_commit` so an event is only emitted if the change committed.
-- **Security/failure events** (failed login, rate limiting, refresh replay) use
-  :func:`record_security_event` and are emitted immediately, outside any business transaction, so a
-  rollback can never discard them (ADR-0006). Replay detection commits its revocation first and only
-  then records the event.
+- every entry corresponds to at most one audit row (there is no persistence sink here, so nothing
+  can be written twice);
+- logging can never fail the caller: sink errors are caught and reported, and a committed mutation
+  is never turned into an HTTP error by a logging problem;
+- :func:`log_security_event` is for operational events that are deliberately **not** persisted
+  (high-volume, no state change), e.g. ``auth.refresh.rotated``.
 
-Not yet implemented (Batch 5): durable persistence. Until then events exist only in logs; nothing in
-Batch 3 claims an audit record is stored.
+Conventions: dotted, past-tense names; ``outcome`` is ``"success"`` or ``"failure"``; identifiers
+only, never secrets (the logging pipeline redacts sensitive keys as a safety net).
 """
 
 from collections.abc import Callable
@@ -66,17 +58,31 @@ _SINKS: list[SecurityEventSink] = [log_sink]
 
 
 def register_sink(sink: SecurityEventSink) -> Callable[[], None]:
-    """Add a sink (Batch 5: durable audit persistence; tests: capture). Returns an unregister."""
+    """Add an observer (tests capture events this way). Returns an unregister function."""
     _SINKS.append(sink)
     return lambda: _SINKS.remove(sink)
 
 
-def _emit(event: SecurityEvent) -> None:
+def emit(event: SecurityEvent) -> None:
+    """Deliver an event to every sink now. Never raises."""
     for sink in list(_SINKS):
-        sink(event)
+        try:
+            sink(event)
+        except Exception as exc:  # logging must never fail the caller
+            _logger.error(
+                "security.sink_failed",
+                event_name=event.name,
+                sink=getattr(sink, "__qualname__", type(sink).__name__),
+                error_type=type(exc).__name__,
+            )
 
 
-def _build(name: str, outcome: Outcome, **fields: Any) -> SecurityEvent:
+def emit_after_commit(event: SecurityEvent) -> None:
+    """Deliver once the surrounding transaction commits (dropped if it rolls back)."""
+    transaction.on_commit(lambda: emit(event))
+
+
+def build_event(name: str, outcome: Outcome, **fields: Any) -> SecurityEvent:
     known = {
         k: fields.pop(k, None) for k in ("user_id", "session_id", "client_ip", "subject_digest")
     }
@@ -88,12 +94,6 @@ def _build(name: str, outcome: Outcome, **fields: Any) -> SecurityEvent:
     )
 
 
-def record_security_event(name: str, *, outcome: Outcome, **fields: Any) -> None:
-    """Emit immediately (failures, rate limiting, replay detection after its commit)."""
-    _emit(_build(name, outcome, **fields))
-
-
-def record_after_commit(name: str, *, outcome: Outcome = "success", **fields: Any) -> None:
-    """Emit once the surrounding transaction commits (dropped if it rolls back)."""
-    event = _build(name, outcome, **fields)
-    transaction.on_commit(lambda: _emit(event))
+def log_security_event(name: str, *, outcome: Outcome, **fields: Any) -> None:
+    """Log an operational event immediately **without** an audit record."""
+    emit(build_event(name, outcome, **fields))

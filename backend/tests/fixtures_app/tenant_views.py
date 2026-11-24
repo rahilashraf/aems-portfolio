@@ -12,6 +12,7 @@ from rest_framework.permissions import BasePermission
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.audit.api.views import OrganizationAuditLogListView
 from apps.core.api.views import AemsGenericAPIView
 from apps.organizations.scoping import (
     OrganizationScopedViewMixin,
@@ -81,3 +82,13 @@ class TenantNoteDetailView(OrganizationScopedViewMixin, AemsGenericAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class TestOnlyAuditLogView(OrganizationAuditLogListView):
+    """The production tenant audit view with a test-only permission (Batch 6 adds audit.view).
+
+    Lets tests exercise the real scoping, filters and pagination while the production route stays
+    fail-closed.
+    """
+
+    permission_classes = [TestOnlyAnyMember]

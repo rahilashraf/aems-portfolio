@@ -132,7 +132,11 @@ work" call was removed: it hashes nothing, so it never balanced the two paths.
 - **Deactivation** goes through `services.deactivate_user`, which revokes sessions. It is the only
   deactivation path; there is deliberately no public API endpoint for it.
 
-### Security-event boundary (Batch 5 dependency)
+### Security-event boundary (Batch 5 dependency; implemented by ADR-0016)
+Batch 5 replaced this boundary as described in [ADR-0016](0016-durable-audit-logging.md):
+mutation events are written by `audit.record()` inside their transactions; failure events by
+`audit.record_security_event()` in their own; `apps.core.security_events` is now the log layer
+only. The original Batch 3 text follows.
 The approved plan records `auth.refresh_reuse_detected` as an audit event in the replay
 transaction, with a test asserting the event exists. Durable audit persistence (`AuditLog`) is
 Batch 5. Adding an audit schema in Batch 3 would implement part of Batch 5 early, so it is not done.

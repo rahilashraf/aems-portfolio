@@ -20,6 +20,11 @@ UV := uv --directory $(BACKEND)
 COMPOSE := docker compose
 MANAGE := $(UV) run python manage.py
 
+# Two database roles (ADR-0016): migrations, drift checks and the test suite connect as the
+# owner (DATABASE_OWNER_URL); everything else uses DATABASE_URL, the runtime role.
+OWNER_DATABASE_URL = $(or $(DATABASE_OWNER_URL),$(DATABASE_URL))
+AS_OWNER = DATABASE_URL="$(OWNER_DATABASE_URL)"
+
 .PHONY: help
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -55,32 +60,37 @@ ps: ## Show service status
 docker-shell: ## Open a shell in the backend container
 	$(COMPOSE) exec backend bash
 
-docker-test: ## Run the test suite inside the backend container
-	$(COMPOSE) exec -e DJANGO_SETTINGS_MODULE=config.settings.test backend pytest --cov
+docker-test: ## Run the test suite inside the backend container (as the owner role)
+	$(COMPOSE) exec -e DJANGO_SETTINGS_MODULE=config.settings.test backend \
+		sh -c 'AEMS_RUNTIME_DATABASE_URL="$$DATABASE_URL" DATABASE_URL="$$DATABASE_OWNER_URL" pytest --cov'
 
-docker-migrate: ## Apply migrations inside the backend container
-	$(COMPOSE) exec backend python manage.py migrate
+docker-migrate: ## Apply migrations inside the backend container (as the owner role)
+	$(COMPOSE) exec backend sh -c 'DATABASE_URL="$$DATABASE_OWNER_URL" python manage.py migrate'
 
 # ------------------------------------------------------------------ django (host)
-.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables shell sendtestemail docker-sendtestemail \
+.PHONY: run migrate makemigrations check check-migrations check-no-auth-tables \
+	verify-runtime-privileges shell sendtestemail docker-sendtestemail \
 	deliver-reset-emails docker-deliver-reset-emails
 run: ## Run the dev server on the host (needs the compose db running)
 	$(MANAGE) runserver
 
-migrate: ## Apply migrations (host)
-	$(MANAGE) migrate
+migrate: ## Apply migrations as the owner role; grants the runtime role its privileges (host)
+	$(AS_OWNER) $(MANAGE) migrate
 
 makemigrations: ## Create migrations (host)
-	$(MANAGE) makemigrations
+	$(AS_OWNER) $(MANAGE) makemigrations
 
 check: ## Django system checks (incl. the public-endpoint allowlist)
 	$(MANAGE) check --fail-level WARNING
 
 check-migrations: ## Fail if models and migrations are out of sync
-	$(MANAGE) makemigrations --check --dry-run
+	$(AS_OWNER) $(MANAGE) makemigrations --check --dry-run
 
 check-no-auth-tables: ## Fail if Django's default auth/admin/session tables exist in the database
 	$(MANAGE) verify_no_default_tables
+
+verify-runtime-privileges: ## Fail unless DATABASE_URL's role can only read/append the audit log
+	$(MANAGE) verify_runtime_privileges
 
 shell: ## Django shell (host)
 	$(MANAGE) shell
@@ -103,8 +113,8 @@ docker-deliver-reset-emails: ## Send queued password-reset emails from the backe
 .PHONY: test lint format typecheck audit security secrets deploy-check schema schema-check qa
 PYTEST_ARGS ?=
 
-test: ## Run tests with coverage (90% gate); extra args via PYTEST_ARGS
-	$(UV) run pytest --cov $(PYTEST_ARGS)
+test: ## Run tests with coverage (90% gate) as the owner role; extra args via PYTEST_ARGS
+	$(AS_OWNER) AEMS_RUNTIME_DATABASE_URL="$(DATABASE_URL)" $(UV) run pytest --cov $(PYTEST_ARGS)
 
 lint: ## Lint and check formatting
 	$(UV) run ruff check .

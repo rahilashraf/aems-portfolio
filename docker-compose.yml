@@ -9,6 +9,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD in .env}
       POSTGRES_DB: postgres
       AEMS_DB_NAME: ${AEMS_DB_NAME:-aems}
+      AEMS_DB_OWNER: ${AEMS_DB_OWNER:-aems_owner}
+      AEMS_DB_OWNER_PASSWORD: ${AEMS_DB_OWNER_PASSWORD:?set AEMS_DB_OWNER_PASSWORD in .env}
       AEMS_DB_USER: ${AEMS_DB_USER:-aems_app}
       AEMS_DB_PASSWORD: ${AEMS_DB_PASSWORD:?set AEMS_DB_PASSWORD in .env}
     volumes:
@@ -30,6 +32,9 @@ services:
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.local
       DATABASE_URL: postgres://${AEMS_DB_USER:-aems_app}:${AEMS_DB_PASSWORD}@db:5432/${AEMS_DB_NAME:-aems}
+      # Migrations run as the owner role: `make docker-migrate` passes this as DATABASE_URL.
+      DATABASE_OWNER_URL: postgres://${AEMS_DB_OWNER:-aems_owner}:${AEMS_DB_OWNER_PASSWORD}@db:5432/${AEMS_DB_NAME:-aems}
+      DJANGO_DB_RUNTIME_ROLE: ${AEMS_DB_USER:-aems_app}
       EMAIL_URL: smtp://mailpit:1025
     volumes:
       - ./backend:/app

@@ -90,7 +90,13 @@ jobs:
     env:
       DJANGO_SECRET_KEY: ci-only-insecure-secret-key-not-used-outside-this-workflow
       DJANGO_JWT_SIGNING_KEY: ci-only-insecure-jwt-signing-key-not-used-outside-this-workflow
+      # Runtime role (what the application connects as) and owner role (migrations, test suite);
+      # the Makefile runs migrations and tests as the owner (ADR-0016).
       DATABASE_URL: postgres://aems_app:ci-only-app-password@localhost:5432/aems
+      DATABASE_OWNER_URL: postgres://aems_owner:ci-only-owner-password@localhost:5432/aems
+      DJANGO_DB_RUNTIME_ROLE: aems_app
+      # Database-privilege tests must run here, never be skipped.
+      AEMS_REQUIRE_RUNTIME_ROLE_TESTS: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -112,7 +118,7 @@ jobs:
       - name: Install locked dependencies
         run: make install
 
-      - name: Create non-superuser application role
+      - name: Create the owner and runtime database roles
         env:
           PGHOST: localhost
           PGUSER: postgres
@@ -120,13 +126,17 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
           AEMS_DB_NAME: aems
+          AEMS_DB_OWNER: aems_owner
+          AEMS_DB_OWNER_PASSWORD: ci-only-owner-password
           AEMS_DB_USER: aems_app
           AEMS_DB_PASSWORD: ci-only-app-password
         run: |
           bash docker/postgres/init/01-create-app-role.sh
-          is_super="$(psql -U postgres -d postgres -tAc "SELECT rolsuper FROM pg_roles WHERE rolname = 'aems_app'")"
-          test "$is_super" = "f" || { echo "aems_app must not be a superuser"; exit 1; }
-          echo "aems_app is a non-superuser role"
+          roles="$(psql -U postgres -d postgres -tAc "SELECT rolname || ':' || rolsuper || ':' || rolcreatedb FROM pg_roles WHERE rolname IN ('aems_owner', 'aems_app') ORDER BY 1")"
+          echo "$roles"
+          test "$roles" = "$(printf 'aems_app:false:false\naems_owner:false:true')" \
+            || { echo "Unexpected role attributes"; exit 1; }
+          echo "Neither role is a superuser; only the owner can create (test) databases"
 
       - name: Django system checks
         run: make check
@@ -136,6 +146,9 @@ jobs:
 
       - name: Verify no default auth tables exist
         run: make check-no-auth-tables
+
+      - name: Verify runtime role privileges (audit log read/append only)
+        run: make verify-runtime-privileges
 
       - name: Migration drift check (application settings)
         run: make check-migrations
@@ -275,6 +288,7 @@ jobs:
           docker run -d --name aems-db --network aems-ci \
             -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-only-superuser-password -e POSTGRES_DB=postgres \
             -e AEMS_DB_NAME=aems -e AEMS_DB_USER=aems_app -e AEMS_DB_PASSWORD=ci-only-app-password \
+            -e AEMS_DB_OWNER=aems_owner -e AEMS_DB_OWNER_PASSWORD=ci-only-owner-password \
             -v "$PWD/docker/postgres/init:/docker-entrypoint-initdb.d:ro" \
             --health-cmd "pg_isready -U postgres -d aems" --health-interval 2s --health-retries 30 \
             postgres:17-alpine
@@ -349,8 +363,11 @@ jobs:
 
       - name: Migrate inside the production container and exercise authentication
         run: |
-          docker exec aems-api python manage.py migrate --noinput
+          # Migrations run as the owner role and grant the runtime role its privileges.
+          docker exec -e DATABASE_URL=postgres://aems_owner:ci-only-owner-password@aems-db:5432/aems \
+            -e DJANGO_DB_RUNTIME_ROLE=aems_app aems-api python manage.py migrate --noinput
           docker exec aems-api python manage.py verify_no_default_tables
+          docker exec aems-api python manage.py verify_runtime_privileges
           base=http://127.0.0.1:8000
           got="$(curl -sS -o /tmp/login.json -w '%{http_code}' -H "Host: $API_HOST" \
             -H "X-Forwarded-Proto: https" -H "Content-Type: application/json" \
@@ -466,6 +483,31 @@ jobs:
           auth=()
           call 401 GET /api/v1/organizations/
           call 401 GET "/api/v1/platform/organizations/"
+
+      - name: Audit records are durable and append-only in the production database
+        run: |
+          as_role() {  # as_role <role> <password> <sql>: run SQL inside the database container
+            docker exec -e PGPASSWORD="$2" aems-db psql -h localhost -U "$1" -d aems -v ON_ERROR_STOP=1 -tAc "$3"
+          }
+          expect_error() {  # expect_error <role> <password> <sql> <expected message fragment>
+            if out="$(as_role "$1" "$2" "$3" 2>&1)"; then echo "Unexpectedly succeeded: $3"; exit 1; fi
+            echo "$1> $3 -> $out"
+            grep -q "$4" <<<"$out"
+          }
+          # Earlier steps produced audit records through the API and the delivery command.
+          for action in auth.login.failed auth.password_reset.requested auth.password_reset.email_delivered \
+                        auth.password_reset.completed organization.created tenant.access_denied; do
+            n="$(as_role aems_app ci-only-app-password "SELECT count(*) FROM audit_auditlog WHERE action = '$action'")"
+            echo "$action: $n"
+            test "$n" -ge 1
+          done
+          expect_error aems_app ci-only-app-password "UPDATE audit_auditlog SET action = 'tampered.event'" "permission denied"
+          expect_error aems_app ci-only-app-password "DELETE FROM audit_auditlog" "permission denied"
+          expect_error aems_app ci-only-app-password "TRUNCATE audit_auditlog" "permission denied"
+          expect_error aems_app ci-only-app-password "ALTER TABLE audit_auditlog DISABLE TRIGGER audit_auditlog_append_only" "must be owner"
+          expect_error aems_owner ci-only-owner-password "UPDATE audit_auditlog SET action = 'tampered.event'" "append-only"
+          expect_error aems_owner ci-only-owner-password "DELETE FROM audit_auditlog" "append-only"
+          echo "Runtime role cannot change audit history; the trigger stops the owner role too"
 
       - name: Show container logs
         if: always()

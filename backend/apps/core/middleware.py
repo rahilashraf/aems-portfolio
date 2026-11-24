@@ -6,13 +6,26 @@ from collections.abc import Callable
 import structlog
 from django.http import HttpRequest, HttpResponseBase
 
+from .net import client_ip
 from .request_context import (
     REQUEST_ID_HEADER,
     REQUEST_ID_META_KEY,
+    RequestMeta,
     bind_request_context,
+    bind_request_meta,
     clear_request_context,
     resolve_request_id,
 )
+from .sanitization import sanitize_text
+
+USER_AGENT_MAX_LENGTH = 256
+
+
+def clean_user_agent(raw: object) -> str:
+    """Printable characters only, credentials scrubbed, bounded length."""
+    text = "".join(ch for ch in str(raw or "") if ch.isprintable())
+    return sanitize_text(text)[:USER_AGENT_MAX_LENGTH]
+
 
 access_logger = structlog.get_logger("aems.request")
 
@@ -45,6 +58,12 @@ class RequestContextMiddleware:
         request_id = resolve_request_id(request.META.get(REQUEST_ID_META_KEY))
         request.request_id = request_id  # type: ignore[attr-defined]
         bind_request_context(request_id=request_id)
+        bind_request_meta(
+            RequestMeta(
+                client_ip=client_ip(request),
+                user_agent=clean_user_agent(request.META.get("HTTP_USER_AGENT", "")),
+            )
+        )
         started = time.perf_counter()
         try:
             response = self.get_response(request)

@@ -666,8 +666,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 | 1 — Repository scaffolding | Merged | rahilashraf/aems-portfolio#1 | Review findings AEMS-001…006 resolved before merge |
 | 2 — Core infrastructure & CI | Merged | rahilashraf/aems-portfolio#2 | Review findings AEMS-007…009 resolved before merge |
 | 3 — Accounts & authentication | Merged | rahilashraf/aems-portfolio#4 | Review findings AEMS-010/011 and the password-reset outbox resolved before merge |
-| 4 — Organizations & tenancy | In review | (this batch) | See Batch 4 deviations below |
-| 5–8 | Not started | — | — |
+| 4 — Organizations & tenancy | Merged | rahilashraf/aems-portfolio#5 | Review findings AEMS-012…014 resolved before merge |
+| 5 — Audit logging | In review | (this batch) | See Batch 5 deviations below |
+| 6–8 | Not started | — | — |
 
 ### Batch 2 deviations from the original plan
 
@@ -737,3 +738,36 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   writes in the isolation matrix before real tenant resources exist.
 - **Deferred:** members, roles and permissions (Batch 6); invitations (Batch 7); audit logs
   (Batch 5); RLS (Phase 2).
+
+### Batch 5 deviations and clarifications (ADR-0016)
+
+- **Database role split.** Least privilege on the audit table is impossible while the runtime role
+  owns every table, so the smallest split was introduced:
+  - an owner role (migrations, tests) and a runtime role (the application);
+  - grants applied after every `migrate`;
+  - a `verify_runtime_privileges` command;
+  - an upgrade script for existing databases.
+- **`apps.core.security_events` is log-only.** Durable records are written by the audit service
+  directly, not by a sink. Mutation records are inside their transactions; independent events use
+  `transaction.atomic(durable=True)`.
+- **`auth.refresh.rotated` and `auth.logout` are log-only events.** Rotation is high volume and
+  changes no account state. A logout that revokes a session is recorded durably as
+  `auth.session.revoked` in the revocation's transaction; a separate durable `auth.logout` row
+  would duplicate it and, written after the revocation committed, could turn a completed logout
+  into a 500 (review finding AEMS-016).
+- **Self-service profile changes** (`PATCH /auth/me/`) go through `accounts.services.update_profile`
+  and record `auth.account.profile_updated` in the same transaction; unchanged submissions record
+  nothing (review finding AEMS-015).
+  Session creation is recorded by `auth.login.succeeded`. Undecodable refresh tokens are now
+  recorded as `auth.refresh.rejected`.
+- **New admin events:** account creation, privileged-field and permission changes, and the
+  administrator as actor for admin password changes and session revocations.
+- **`tenant.access_denied`** belongs to no organization (it may name an organization the caller
+  cannot see).
+- **New platform route** `GET /platform/audit-logs/`, for events without an organization, requiring
+  `audit.view_auditlog`. The tenant route requires `audit.view` and fails closed until Batch 6.
+- **No `TRUNCATE` trigger:** `TRUNCATE` is denied to the runtime role by privileges. The owner
+  keeps it because test-database flushing uses it.
+- **Saving an audit row twice** raises; `bulk_create` is disabled for audit rows.
+- **Deferred:** retention, archival, hash chaining; database-level protection against the owner
+  or superusers.

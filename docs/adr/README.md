@@ -22,3 +22,4 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0013](0013-authentication-implementation-and-security-events.md) | Authentication implementation and the security-event boundary | Accepted |
 | [0014](0014-password-reset-email-outbox.md) | Password-reset email outbox | Accepted |
 | [0015](0015-organizations-and-tenancy-implementation.md) | Organizations and tenancy implementation | Accepted |
+| [0016](0016-durable-audit-logging.md) | Durable audit logging, database roles and audit APIs | Accepted |

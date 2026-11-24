@@ -4,7 +4,7 @@ AEMS is a multi-organization SaaS platform for schools, universities, and traini
 supporting online and paper-based examinations with strict tenant isolation and customizable,
 organization-scoped roles and permissions.
 
-> **Status:** Phase 1 — Backend Foundation, Batch 4 (organizations and tenancy).
+> **Status:** Phase 1 — Backend Foundation, Batch 5 (durable audit logging).
 > See the [Phase 1 plan](docs/phase-1-plan.md) and [Architecture Decision Records](docs/adr/README.md).
 
 ## Technology
@@ -77,7 +77,7 @@ Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.13. The database st
 ```bash
 make env install hooks   # .env, dependencies, git hooks
 docker compose up -d db mailpit
-make migrate             # apply migrations to the database in DATABASE_URL
+make migrate             # apply migrations as the owner role (DATABASE_OWNER_URL)
 make test                # pytest + coverage gate (90%)
 make qa                  # every quality gate
 ```
@@ -90,7 +90,25 @@ uv --directory backend run python manage.py createsuperuser
 ```
 
 Variables passed on the command line or in the environment override `.env` for `make` targets, for
-example `DATABASE_URL=postgres://... make migrate` migrates that database.
+example `DATABASE_OWNER_URL=postgres://... make migrate` migrates that database.
+
+**Two database roles** ([ADR-0016](docs/adr/0016-durable-audit-logging.md)):
+- `DATABASE_URL` (`aems_app`) is the **runtime** role the application uses. It owns nothing.
+- `DATABASE_OWNER_URL` (`aems_owner`) owns the schema. `make migrate`, `make test` and the drift
+  checks connect with it.
+
+After every migrate, the runtime role named by `DJANGO_DB_RUNTIME_ROLE` is granted its
+privileges, with read and append only on the audit log. `make verify-runtime-privileges` checks
+them.
+
+Databases created before Batch 5 (where `aems_app` owns everything) need a one-time upgrade, run as
+a superuser, then `make migrate`:
+
+```bash
+docker compose exec -T db psql -U postgres -d aems -v owner_user=aems_owner -v owner_password=dev-only-owner-password -v app_user=aems_app -v app_db=aems -f - < docker/postgres/upgrade/batch-5-role-split.sql
+```
+
+Alternatively, recreate the volume with `docker compose down -v`, which deletes local data.
 
 | Command | Purpose |
 |---|---|
@@ -140,6 +158,7 @@ The REST API is versioned by URL path: `/api/v1/`. Conventions (details in the A
 | `/api/v1/auth/...` | Authentication, profile, passwords and sessions (see below) | Mixed |
 | `/api/v1/organizations/...` | The caller's organizations and tenant APIs (see below) | Bearer + membership |
 | `/api/v1/platform/organizations/...` | Organization administration (see below) | Platform administrators |
+| `/api/v1/organizations/{org_id}/audit-logs/`, `/api/v1/platform/audit-logs/` | Audit history (see below) | `audit.view` / platform auditors |
 | `GET /api/schema/` | OpenAPI 3 schema | Public when `API_DOCS_ENABLED`; always 404 in production |
 | `GET /api/docs/`, `GET /api/redoc/` | Swagger UI / ReDoc | Same as above |
 
@@ -248,8 +267,7 @@ A **platform administrator** is an active staff account holding the matching Dja
 (`organizations.view_organization`, `add_organization` or `change_organization`; superusers hold
 all). Grant these in the admin. Platform administration gives no access to tenant data.
 
-Deferred routes: members, roles and permissions (Batch 6); invitations (Batch 7); audit logs
-(Batch 5).
+Deferred routes: members, roles and permissions (Batch 6); invitations (Batch 7).
 
 **Writing tenant endpoints.** Subclass `OrganizationScopedViewMixin` before the base view. Set
 `tenant_model` and `permission_classes = [HasOrgPermission]`, and declare `member_actions`
@@ -260,6 +278,37 @@ meta-test (`apps/organizations/tests/test_route_coverage.py`) fails for routes t
 **Tests.** `apps/organizations/tests/` contains the tenant-isolation matrix and the route
 meta-test. Active organizations in tests come from a test-only fixture, because production code
 cannot activate one.
+
+## Audit log
+
+Security-relevant actions are stored in an append-only `AuditLog`
+([ADR-0006](docs/adr/0006-audit-logging.md), [ADR-0016](docs/adr/0016-durable-audit-logging.md)).
+
+- **Mutations are atomic with their records.** Services call `audit.record()` inside the
+  transaction that makes the change, so a committed change always has its record and a rolled-back
+  change has none. If the audit insert fails, the change does not commit.
+- **Failures are recorded independently.** Failed logins, rate limiting, invalid or replayed
+  tokens, CSRF failures and denied tenant access go through `audit.record_security_event()`, in
+  their own transaction, after any failed operation has rolled back.
+- **Append-only.**
+  - The model and queryset refuse changes and deletes.
+  - A PostgreSQL trigger rejects `UPDATE`/`DELETE` even from raw SQL.
+  - The runtime role holds only `SELECT`/`INSERT` and owns nothing.
+  - The admin is read-only.
+
+  A superuser or the table owner can still disable the trigger, so protecting history from
+  database administrators is an operational matter.
+- **No secrets.** Metadata keys and changed fields are allowlisted and validated; text is
+  scrubbed and bounded; password changes are stored as "changed" without values.
+- **Not yet implemented:** retention, archival and hash chaining.
+
+| Endpoint | Returns | Access |
+|---|---|---|
+| `GET /api/v1/organizations/{org_id}/audit-logs/` | The organization's events. Filters: `action`, `actor`, `outcome`, `created_after`, `created_before`; cursor pagination, newest first | Non-members: 404. Members need `audit.view`: **403 until Batch 6 roles** |
+| `GET /api/v1/platform/audit-logs/` | Events without an organization (accounts, authentication, platform actions, denied tenant access); same filters | Active staff with `audit.view_auditlog` |
+
+Organization events, including changes made by platform staff, belong to that organization's
+history. Account and authentication events, and denied tenant access, belong to no organization.
 
 ## Health endpoints
 
@@ -320,8 +369,11 @@ local socket while sending the first `DJANGO_ALLOWED_HOSTS` entry as the `Host` 
 validation therefore stays fully enforced: no loopback address or wildcard needs to be added to
 `ALLOWED_HOSTS`.
 
-The application connects to PostgreSQL as a non-superuser role (`aems_app`) created by
+The application connects to PostgreSQL as the non-superuser runtime role (`aems_app`), which owns
+no tables. Migrations run as the owner role (`aems_owner`). Both roles are created by
 [`docker/postgres/init/01-create-app-role.sh`](docker/postgres/init/01-create-app-role.sh).
+Production must provision the same split and run `migrate` with the owner's `DATABASE_URL` and
+`DJANGO_DB_RUNTIME_ROLE` set (ADR-0016).
 
 ## Continuous integration
 
@@ -331,7 +383,7 @@ push to `main`, with no path filters ([ADR-0011](docs/adr/0011-continuous-integr
 | Check | Contents |
 |---|---|
 | Lint & type check | ruff, ruff format, strict mypy, hygiene hooks |
-| Tests & migrations | PostgreSQL 17, non-superuser role, fresh migrate, no default auth tables, migration drift, full suite with 90% branch coverage, coverage artifact |
+| Tests & migrations | PostgreSQL 17, owner and runtime roles (neither superuser), fresh migrate as owner, no default auth tables, runtime privileges verified, migration drift, full suite with 90% branch coverage (including runtime-role privilege tests), coverage artifact |
 | Security | Bandit, pip-audit, detect-secrets, production `check --deploy` |
 | API contract | OpenAPI generation, validation and drift check |
 | Docker image | clean build of the committed Dockerfile, non-root, container becomes `healthy`, endpoint behaviour |

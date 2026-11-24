@@ -28,9 +28,10 @@ from django.db.models import QuerySet
 from rest_framework import exceptions, serializers
 from rest_framework.request import Request
 
+from apps.accounts.models import User
+from apps.audit import services as audit
 from apps.core.api.permissions import is_authenticated
 from apps.core.net import client_ip as request_client_ip
-from apps.core.security_events import record_security_event
 
 from .models import Membership, Organization
 from .selectors import resolve_active_membership
@@ -52,7 +53,9 @@ class OrganizationScopedViewMixin:
     """
 
     organization_url_kwarg = ORGANIZATION_URL_KWARG
-    tenant_model: type[TenantScopedModel] | None = None
+    # A TenantScopedModel, or another model whose manager offers a fail-closed
+    # ``for_organization()`` (the audit log, whose organization is nullable).
+    tenant_model: Any = None
 
     organization: Organization
     membership: Membership
@@ -70,12 +73,14 @@ class OrganizationScopedViewMixin:
         organization_id = self.kwargs.get(self.organization_url_kwarg)
         membership = resolve_active_membership(request.user, organization_id)
         if membership is None:
-            record_security_event(
+            # Platform-level event (no organization): the caller is not a member, and the
+            # requested organization may not exist. Kept out of any tenant's history (ADR-0016).
+            audit.record_security_event(
                 "tenant.access_denied",
-                outcome="failure",
-                user_id=getattr(request.user, "pk", None),
+                actor=request.user if isinstance(request.user, User) else None,
+                target_type="organization",
+                target_id=organization_id,
                 client_ip=request_client_ip(request),
-                organization_id=str(organization_id),
             )
             raise exceptions.NotFound()
         self.membership = membership
