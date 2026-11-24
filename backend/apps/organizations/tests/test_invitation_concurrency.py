@@ -13,11 +13,13 @@ from django.db import DatabaseError
 
 from apps.accounts.models import User
 from apps.accounts.services import deactivate_user
+from apps.audit.models import AuditLog
 from apps.organizations import invitations
 from apps.organizations.exceptions import (
     AccountInactiveError,
     InvitationAlreadyPendingError,
     InvitationAuthorityRevokedError,
+    InvitationEmailMismatchError,
     InvitationNotFoundError,
     OrganizationNotProvisioningError,
     SignInRequiredError,
@@ -284,3 +286,92 @@ def test_mixed_invitation_and_rbac_operations_do_not_deadlock(
     for result in run_together(*calls):
         assert not isinstance(result, DatabaseError), result
     assert rbac.active_owner_ids(organization)
+
+
+# ------------------------------------------------------------- AEMS-018: email ownership
+def _email_change_race(invitee: User, token: str) -> tuple[Any, Any, bool]:
+    """An administrator's email change holds the user row while the acceptance waits for it."""
+    from apps.rbac.tests.test_concurrency import _race_with_held_change  # noqa: PLC0415
+
+    return _race_with_held_change(
+        lambda: User.objects.filter(pk=invitee.pk).update(email="moved@elsewhere.org"),
+        lambda: invitations.accept_invitation(token, user=invitee),
+    )
+
+
+def test_email_change_while_acceptance_waits_for_the_user_lock(
+    active_org: Any, make_user: Callable[..., User]
+) -> None:
+    organization, owner, _admin = active_org
+    invitee = make_user(EMAIL)
+    token = _invite(organization, owner, role(organization, SystemRole.MEMBER))
+    _holder, contender, blocked = _email_change_race(invitee, token)
+    assert blocked  # the acceptance waited on the user row lock
+    assert isinstance(contender, InvitationEmailMismatchError), contender
+    invitation = Invitation.objects.get(email=EMAIL)
+    assert invitation.status == InvitationStatus.PENDING
+    assert not Membership.objects.filter(organization=organization, user=invitee).exists()
+    assert not MembershipRole.objects.filter(membership__user=invitee).exists()
+    assert not AuditLog.objects.filter(action="invitation.accepted").exists()
+    assert AuditLog.objects.filter(
+        action="invitation.accept_rejected", metadata__reason="invitation_email_mismatch"
+    ).exists()
+
+
+def test_initial_owner_email_change_race_does_not_activate(
+    platform_admin: User, make_user: Callable[..., User]
+) -> None:
+    invitee = make_user(EMAIL)
+    organization = create_organization(
+        actor=platform_admin,
+        name="Initial",
+        slug="initial",
+        organization_type="other",
+        initial_owner_email=EMAIL,
+    )
+    token = deliver()[EMAIL]
+    _holder, contender, blocked = _email_change_race(invitee, token)
+    assert blocked
+    assert isinstance(contender, InvitationEmailMismatchError), contender
+    organization.refresh_from_db()
+    assert organization.status == OrganizationStatus.PROVISIONING
+    assert not Membership.objects.filter(organization=organization).exists()
+    assert not AuditLog.objects.filter(
+        action__in=["invitation.accepted", "organization.activated", "rbac.owner.granted"]
+    ).exists()
+    assert Invitation.objects.get(organization=organization).status == InvitationStatus.PENDING
+
+
+def test_unchanged_email_accepts_after_waiting_for_the_user_lock(
+    active_org: Any, make_user: Callable[..., User]
+) -> None:
+    """Control: a concurrent change to another column of the user row does not reject."""
+    from apps.rbac.tests.test_concurrency import _race_with_held_change  # noqa: PLC0415
+
+    organization, owner, _admin = active_org
+    invitee = make_user(EMAIL)
+    token = _invite(organization, owner, role(organization, SystemRole.MEMBER))
+    _holder, contender, blocked = _race_with_held_change(
+        lambda: User.objects.filter(pk=invitee.pk).update(full_name="Renamed"),
+        lambda: invitations.accept_invitation(token, user=invitee),
+    )
+    assert blocked
+    assert isinstance(contender, invitations.AcceptanceResult), contender
+    assert Membership.objects.filter(organization=organization, user=invitee).exists()
+
+
+def test_deactivation_while_acceptance_waits_still_fails_closed(
+    active_org: Any, make_user: Callable[..., User]
+) -> None:
+    from apps.rbac.tests.test_concurrency import _race_with_held_change  # noqa: PLC0415
+
+    organization, owner, _admin = active_org
+    invitee = make_user(EMAIL)
+    token = _invite(organization, owner, role(organization, SystemRole.MEMBER))
+    _holder, contender, blocked = _race_with_held_change(
+        lambda: deactivate_user(invitee),
+        lambda: invitations.accept_invitation(token, user=invitee),
+    )
+    assert blocked
+    assert isinstance(contender, AccountInactiveError), contender
+    assert not Membership.objects.filter(organization=organization, user=invitee).exists()

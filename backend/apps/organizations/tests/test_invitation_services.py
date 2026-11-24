@@ -146,3 +146,96 @@ def test_tokens_and_masking() -> None:
     assert invitations._find_by_token(None) is None  # type: ignore[arg-type]
     assert invitations.mask_email("a@example.org") == "a*@example.org"
     assert invitations.mask_email("alice@example.org") == "a****@example.org"
+
+
+# ------------------------------------------------------------------------------- AEMS-018
+def test_email_changed_before_acceptance_is_rejected(team: Team, make_user: Any) -> None:
+    from apps.organizations.exceptions import InvitationEmailMismatchError  # noqa: PLC0415
+    from apps.organizations.models import Membership  # noqa: PLC0415
+
+    invitee = make_user(EMAIL)
+    _invite(team)
+    token = deliver()[EMAIL]
+    User.objects.filter(pk=invitee.pk).update(email="moved@elsewhere.org")
+    with pytest.raises(InvitationEmailMismatchError):
+        invitations.accept_invitation(token, user=User.objects.get(pk=invitee.pk))
+    assert Invitation.objects.get(email=EMAIL).status == "pending"
+    assert not Membership.objects.filter(organization=team.org, user=invitee).exists()
+
+
+def test_email_changed_between_lookup_and_lock_is_rejected_under_the_lock(
+    team: Team, make_user: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deterministic variant of the threaded race: the change lands after the unlocked match."""
+    from apps.audit.models import AuditLog  # noqa: PLC0415
+    from apps.organizations.exceptions import InvitationEmailMismatchError  # noqa: PLC0415
+    from apps.organizations.models import Membership  # noqa: PLC0415
+    from apps.rbac.models import MembershipRole  # noqa: PLC0415
+
+    invitee = make_user(EMAIL)
+    _invite(team)
+    token = deliver()[EMAIL]
+    real = invitations._accept_locked
+
+    def change_then_accept(*args: Any, **kwargs: Any) -> Any:
+        User.objects.filter(pk=invitee.pk).update(email="moved@elsewhere.org")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(invitations, "_accept_locked", change_then_accept)
+    with pytest.raises(InvitationEmailMismatchError):
+        invitations.accept_invitation(token, user=invitee)
+    assert Invitation.objects.get(email=EMAIL).status == "pending"
+    assert not Membership.objects.filter(organization=team.org, user=invitee).exists()
+    assert not MembershipRole.objects.filter(membership__user=invitee).exists()
+    assert not AuditLog.objects.filter(action="invitation.accepted").exists()
+    rejected = AuditLog.objects.get(action="invitation.accept_rejected")
+    assert rejected.metadata == {"reason": "invitation_email_mismatch"}
+    assert "moved@elsewhere.org" not in str(rejected.metadata)
+    # The account keeps its new address; the invitation can still go to its rightful owner.
+    monkeypatch.undo()
+    rightful = make_user(EMAIL)
+    assert invitations.accept_invitation(token, user=rightful).account_created is False
+
+
+def test_unchanged_email_accepts(team: Team, make_user: Any) -> None:
+    invitee = make_user(EMAIL)
+    _invite(team)
+    result = invitations.accept_invitation(deliver()[EMAIL], user=invitee)
+    assert result.membership.user_id == invitee.pk
+
+
+# -------------------------------------------------------- historical invitation roles
+def test_deleting_a_role_after_acceptance_removes_its_historical_invitation_link(
+    team: Team,
+) -> None:
+    """Documents current behaviour (ADR-0018, "Historical role links").
+
+    A role still granted by a pending invitation cannot be deleted. After acceptance the
+    membership holds the role (and blocks deletion) until it is removed from the member; then the
+    role can be deleted and the accepted invitation's ``InvitationRole`` row is removed with it
+    (CASCADE). The invitation row itself is unchanged, and the audit history keeps the role ids
+    the invitation granted.
+    """
+    from apps.audit.models import AuditLog  # noqa: PLC0415
+    from apps.rbac import services as rbac  # noqa: PLC0415
+    from apps.rbac.exceptions import RoleInUseError  # noqa: PLC0415
+    from apps.rbac.tests.conftest import custom_role  # noqa: PLC0415
+
+    spare = custom_role(team.org, "Spare", "members.view")
+    invitation = _invite(team, role_ids=[spare.pk])
+    result = invitations.accept_invitation(deliver()[EMAIL], full_name="N", password=NEW_PASSWORD)
+    with pytest.raises(RoleInUseError):  # still held by the new member
+        rbac.delete_role(actor=team.owner, organization=team.org, role_id=spare.pk)
+    rbac.replace_membership_roles(
+        actor=team.owner, organization=team.org, membership_id=result.membership.pk, role_ids=[]
+    )
+    rbac.delete_role(actor=team.owner, organization=team.org, role_id=spare.pk)
+
+    invitation.refresh_from_db()
+    assert invitation.status == "accepted"  # the invitation row is untouched
+    assert not InvitationRole.objects.filter(invitation=invitation).exists()  # link removed
+    created = AuditLog.objects.get(action="invitation.created", target_id=str(invitation.pk))
+    assert created.metadata["roles_added"] == [str(spare.pk)]  # history kept in the audit log
+    assigned = AuditLog.objects.get(action="rbac.membership.roles_assigned")
+    assert assigned.metadata["roles_added"] == [str(spare.pk)]
+    assert AuditLog.objects.filter(action="rbac.role.deleted", target_id=str(spare.pk)).exists()

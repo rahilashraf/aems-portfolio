@@ -22,7 +22,9 @@ Acceptance (``accept_invitation``)
       created with the invitation's address. Holding the emailed token proves the mailbox.
 
     Everything happens in one transaction: account, membership, roles, invitation consumption,
-    activation and audit records commit together or not at all.
+    activation and audit records commit together or not at all. Ownership of the invited address
+    is re-checked against the locked user row (AEMS-018), so an address changed while the
+    acceptance waited for the lock is rejected.
 
 Lock order (ADR-0017, extended)
     user row → organization row → invitation row → new membership and role rows.
@@ -540,6 +542,12 @@ def _accept_locked(
             raise InvitationNotFoundError()  # superseded by a newer email
         if invitation.status != InvitationStatus.PENDING or invitation.expires_at <= moment:
             raise InvitationNotFoundError()
+        # AEMS-018: the account was matched to the invitation by address before any lock was
+        # taken. The locked row is authoritative (SELECT … FOR UPDATE returns the latest
+        # committed version, after any concurrent change to the row has committed), so the
+        # address must still match now. An administrator may have changed it meanwhile.
+        if normalize_email(account.email) != invitation.email:
+            raise InvitationEmailMismatchError()
         if not _usable(invitation, organization, moment):
             raise OrganizationUnavailableError()
         roles = _invitation_roles(invitation)

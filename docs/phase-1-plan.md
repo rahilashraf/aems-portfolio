@@ -826,6 +826,10 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 - **Lock order:** user row → organization row → invitation row → new membership and role rows. A
   new account's row is inserted first. Delivery never holds an organization lock.
 - **Production requires an `https://` frontend origin** for emailed links.
+- **Address ownership is re-checked under the user lock** (review finding AEMS-018): an email
+  change committed while an acceptance waits is rejected.
+- **Historical `InvitationRole` links** of finished invitations are removed when their custom
+  role is later deleted (the role ids remain in the audit log). Documented; open for a decision.
 - **`suspended → active` reactivation is still unavailable**, despite §5.3 (later restrictions
   forbid new activation paths). Flagged for review.
 - **Deferred:** resending an email without reissuing, retention of old invitations and outbox

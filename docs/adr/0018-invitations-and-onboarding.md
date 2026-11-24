@@ -47,6 +47,18 @@ Batch 6.
   - rows are never deleted.
 - **Deleting roles.** `rbac.services.delete_role` refuses (409 `role_in_use`) to delete a role
   that a pending invitation would grant.
+- **Historical role links** (assessed in the AEMS-018 review). An accepted, revoked or expired
+  invitation keeps its row, which the trigger makes immutable. Its `InvitationRole` links,
+  however, are not protected:
+  - once no member holds a custom role any more, the role can be deleted, and the links of
+    finished invitations that granted it are deleted with it (CASCADE);
+  - the role ids every invitation granted remain in the append-only audit log
+    (`invitation.created` / `invitation.initial_owner_issued` and
+    `rbac.membership.roles_assigned`), next to `rbac.role.deleted`.
+
+  Keeping the links instead would make every role that was ever invited undeletable, or require
+  copying role snapshots onto invitations. Neither was approved, so the behaviour is documented
+  and pinned by a test, and left for a decision.
 - **`InvitationEmail`:** the delivery outbox (below). It holds no address, token, link or body.
 
 ### Tokens
@@ -163,8 +175,9 @@ Filter by `status`; ordering by creation or expiry with an id tie-breaker.
   1. lock or insert the user row;
   2. lock the organization;
   3. lock the invitation;
-  4. re-check token, status and expiry (with `now` read inside the lock) and the organization
-     state;
+  4. re-check token, status and expiry (with `now` read inside the lock), that the **locked
+     account's current address still equals the invitation's address** (AEMS-018), and the
+     organization state;
   5. re-validate authority (below);
   6. refuse an existing membership (409 `already_member`);
   7. create the active membership and its role assignments (`assigned_by` = inviter);
@@ -177,6 +190,23 @@ Filter by `status`; ordering by creation or expiry with an id tie-breaker.
   roles and `account_created`; no session is issued, and the user then signs in normally.
 - **Rejected acceptances** are recorded after rollback as independent security events
   (`invitation.accept_rejected`, with the error code as `reason`).
+
+### Address ownership under the lock (review finding AEMS-018)
+- **The race.** Acceptance first matches the existing account to the invitation by address,
+  without a lock. Before AEMS-018, `_accept_locked` then locked the user row by id and did not
+  check the address again. A staff administrator changing the account's email in between (the
+  admin user form is the only path that changes an existing address) let the acceptance proceed
+  for an account that no longer owns the invited address. For an initial Owner invitation, it
+  even activated the organization. A threaded PostgreSQL test reproduced this.
+- **The fix.** After the user, organization and invitation locks are held, the locked user row's
+  normalized address must equal the invitation's address. `SELECT … FOR UPDATE` waits for a
+  concurrent change to that row to commit and then returns the new version, so this comparison
+  is authoritative. A mismatch rolls back with 403 `invitation_email_mismatch`, the same answer
+  as signing in with the wrong account; no address is disclosed. The invitation stays pending,
+  nothing is created or activated, and only `invitation.accept_rejected` is recorded.
+- **Unchanged:** the lock order, the bearer requirement for existing accounts, and the
+  inactive-account check, which still fails closed when a deactivation commits while the
+  acceptance waits.
 
 ### Authority re-validation (fail closed)
 A member invitation is accepted only if its **inviter could still issue it**. The check runs under
@@ -259,6 +289,9 @@ Invitation events belong to the organization's history. New metadata keys are `i
 recorded. The actor's address appears only as the existing `actor_email` snapshot (ADR-0016).
 
 ### Testing
+- **AEMS-018:** an email change committed while the acceptance waits for the user lock is
+  rejected for member and initial Owner invitations, with nothing created or activated. A change
+  to another column, and a concurrent deactivation, behave as before.
 - **Coverage:** creation, listing and revocation rules; preview and acceptance for existing and
   new accounts; delegation re-validation; onboarding and activation; delivery; database
   safeguards; the Batch 6 upgrade and reversibility.
