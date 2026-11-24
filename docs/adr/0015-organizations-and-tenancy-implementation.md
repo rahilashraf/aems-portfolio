@@ -96,6 +96,9 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
 
 - **No activation path.** No API, service or admin action can make an organization `active`;
   the admin is read-only for organizations and memberships.
+- **Batch 7 update (ADR-0018).** `provisioning → active` now happens only when the initial Owner
+  invitation is accepted, atomically with the Owner membership. `suspended → active` is still
+  rejected; no other activation path exists.
 - **Test fixture.** Tests that need active organizations use a test-only helper
   (`activate_for_tests` in `apps/organizations/tests/conftest.py`). A test asserts no
   application module references it.
@@ -148,7 +151,7 @@ Abstract base (`apps.organizations.tenancy`) for every tenant-owned model.
 | `GET /organizations/{org_id}/`, `GET /organizations/{org_id}/me/` | Active (any active member). Since Batch 6 (AEMS-017) the profile requires `organization.view`; `me/` stays open to members |
 | `PATCH /organizations/{org_id}/` | Requires `organization.update` (active since Batch 6) |
 | `members/`, `roles/`, `permissions/` | Added in Batch 6; see ADR-0017 |
-| `invitations/`, `/invitations/{token}/…` | Deferred to Batch 7 |
+| `invitations/`, `/invitations/{token}/…` | Added in Batch 7; see ADR-0018 |
 | `audit-logs/` | Added in Batch 5: requires `audit.view` (grantable since Batch 6); see ADR-0016 |
 
 `/organizations/{org_id}/me/` returns the organization and the membership, and since Batch 6 the
@@ -192,7 +195,8 @@ security event without an organization.
     because Batch 6 did not authorize any new activation path. Reactivation remains a separate,
     reviewed change.
 - **Batch 7:** invitations. Accepting an initial-Owner invitation creates the Owner membership and
-  performs `provisioning → active` in one transaction. That is the only activation path.
+  performs `provisioning → active` in one transaction. That is the only activation path. *Done*
+  (ADR-0018).
 
 ## RLS readiness (Phase 2, ADR-0003)
 Nothing here blocks RLS:
@@ -207,5 +211,6 @@ mandatory.
 ## Consequences
 - Every tenant request costs one indexed membership query.
 - Members can read their organization but change nothing until Batch 6.
-- A newly created organization stays unusable (provisioning) until Batch 7.
+- A newly created organization stays unusable (provisioning) until its initial Owner accepts the
+  invitation (Batch 7).
 - Isolation relies on application enforcement plus mandatory tests until RLS is decided.

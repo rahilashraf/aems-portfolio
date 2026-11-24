@@ -35,6 +35,10 @@ requests.
 - **Provisioning lifecycle.** Organizations are created in `provisioning` status (tenant API
   closed) and become `active` only inside the transaction that accepts the initial Owner
   invitation. There is no manual activation, so an active organization never lacks an active Owner.
+  Implemented in Batch 7 ([ADR-0018](0018-invitations-and-onboarding.md)): organization creation
+  issues the initial Owner invitation atomically, and its acceptance creates the Owner membership
+  and activates the organization in one transaction. Member invitations re-validate the
+  inviter's delegation authority at acceptance (fail closed).
 - **Global deactivation across organizations.** Lock the user row, then every active organization
   where the user is an active Owner in ascending id order; re-count other active Owners (active
   membership and active account) in each; reject with all blocking organizations listed if any

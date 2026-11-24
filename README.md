@@ -4,7 +4,7 @@ AEMS is a multi-organization SaaS platform for schools, universities, and traini
 supporting online and paper-based examinations with strict tenant isolation and customizable,
 organization-scoped roles and permissions.
 
-> **Status:** Phase 1 — Backend Foundation, Batch 6 (organization roles and permissions).
+> **Status:** Phase 1 — Backend Foundation, Batch 7 (invitations and organization onboarding).
 > See the [Phase 1 plan](docs/phase-1-plan.md) and [Architecture Decision Records](docs/adr/README.md).
 
 ## Technology
@@ -200,8 +200,8 @@ Design: [ADR-0004](docs/adr/0004-authentication-and-session-management.md) and
 | `DELETE /api/v1/auth/sessions/{id}/` | Revoke one own session | Bearer |
 | `POST /api/v1/auth/sessions/revoke-others/` | Revoke all own sessions except the current one | Bearer |
 
-There is no self-service registration. Accounts are created by platform administrators (and, from
-Batch 7, through organization invitations).
+There is no self-service registration. Accounts are created by platform administrators or by
+accepting an organization invitation (see [Invitations and onboarding](#invitations-and-onboarding)).
 
 ### Password-reset email delivery
 
@@ -249,8 +249,9 @@ organizations ([ADR-0003](docs/adr/0003-tenant-isolation.md),
 - **Authorization is default deny.** Every active member may read their own `me/`. Anything else needs an organization permission granted by the member's roles in that
   organization (see [Roles and permissions](#roles-and-permissions)).
 - **Lifecycle.** New organizations start in `provisioning` and are closed to tenant APIs. They
-  become `active` only when an initial Owner accepts an invitation (Batch 7); there is **no manual
-  activation**. Platform administrators can suspend an active organization, which closes its
+  become `active` only when the initial Owner accepts their invitation (see
+  [Invitations and onboarding](#invitations-and-onboarding)); there is **no manual activation**.
+  Platform administrators can suspend an active organization, which closes its
   tenant APIs immediately. Reactivation is not available yet (it needs a verified Owner).
 - **Row-level security** is deferred to Phase 2, behind a security review (ADR-0003).
 
@@ -260,14 +261,13 @@ organizations ([ADR-0003](docs/adr/0003-tenant-isolation.md),
 | `GET /api/v1/organizations/{org_id}/` | Organization profile | `organization.view` (default Member role) |
 | `PATCH /api/v1/organizations/{org_id}/` | Update `name`/`timezone` | `organization.update` |
 | `GET /api/v1/organizations/{org_id}/me/` | My membership, roles and effective permissions | Active member |
-| `GET`, `POST /api/v1/platform/organizations/` | List (filter `status`, `organization_type`; order `name`, `slug`, `created_at`, `status`) or create (`name`, `slug`, `organization_type`, `timezone`) | Platform administrator |
+| `GET`, `POST /api/v1/platform/organizations/` | List (filter `status`, `organization_type`; order `name`, `slug`, `created_at`, `status`) or create (`name`, `slug`, `organization_type`, `timezone`, `initial_owner_email`) | Platform administrator |
 | `GET`, `PATCH /api/v1/platform/organizations/{id}/` | Retrieve or update (`name`, `organization_type`, `timezone`, `status`: `active` → `suspended` only) | Platform administrator |
 
 A **platform administrator** is an active staff account holding the matching Django permission
 (`organizations.view_organization`, `add_organization` or `change_organization`; superusers hold
 all). Grant these in the admin. Platform administration gives no access to tenant data.
 
-Deferred routes: invitations (Batch 7).
 
 **Writing tenant endpoints.** Subclass `OrganizationScopedViewMixin` before the base view. Set
 `tenant_model` and `permission_classes = [HasOrgPermission]`, and declare `member_actions`
@@ -323,7 +323,45 @@ global groups and staff permissions play no part.
 | `GET /api/v1/organizations/{org_id}/permissions/` | Assignable catalog permissions | `roles.view` |
 
 Organizations created before Batch 6 receive the three system roles by migration, but nobody is
-made an Owner: Owners come from an existing Owner or, in Batch 7, the initial Owner invitation.
+made an Owner: Owners come from an existing Owner or the initial Owner invitation.
+
+## Invitations and onboarding
+
+People join organizations only by invitation ([ADR-0018](docs/adr/0018-invitations-and-onboarding.md)).
+
+- **Initial Owner.** Creating an organization (`POST /api/v1/platform/organizations/` with
+  `initial_owner_email`) creates it `provisioning`, with its roles and an invitation granting the
+  Owner role, in one transaction. Accepting that invitation creates the Owner membership and makes
+  the organization `active`. That is the only activation path.
+- **Member invitations.** Members with `invitations.manage` invite people with roles whose
+  permissions they hold (Owner role: Owners only). When the invitation is accepted, the
+  inviter's authority is checked again; if it has shrunk, acceptance fails
+  (`invitation_authority_revoked`).
+- **Tokens.** Each token is 256 random bits, sent only by email in the link's URL fragment. Only
+  its SHA-256 digest is stored, and it never appears in API responses, logs or audit records. It
+  expires after 7 days, is single use and can be revoked. Each email carries a fresh token, so
+  only the latest link works.
+- **Accepting.**
+  - If an account exists for the invited address, sign in as it and send an empty body.
+  - Otherwise, send `full_name` and `password` to create the account with the invited address.
+  - Membership, roles, invitation consumption and activation commit together, with their audit
+    records.
+- **Email delivery** works like the password-reset outbox: invitations are queued in their
+  transaction and sent by `python manage.py deliver_invitation_emails`, run regularly (for example
+  every minute). Use `--status` for counts. Failures retry with backoff; `delivery_status`
+  reports `pending`, `delivered`, `failed` or `cancelled`.
+
+| Endpoint | Purpose | Access |
+|---|---|---|
+| `GET`, `POST /api/v1/organizations/{org_id}/invitations/` | List (filter `status`; never tokens) or invite (`email`, `role_ids`) | `invitations.manage` |
+| `POST /api/v1/organizations/{org_id}/invitations/{id}/revoke/` | Revoke a pending invitation | `invitations.manage` + authority over its roles |
+| `GET`, `POST /api/v1/platform/organizations/{id}/initial-owner-invitation/` | View, or revoke and reissue, the initial Owner invitation (provisioning only) | `view_organization` / `manage_initial_owner_invitation` |
+| `POST /api/v1/platform/organizations/{id}/initial-owner-invitation/revoke/` | Revoke the initial Owner invitation | `manage_initial_owner_invitation` |
+| `GET /api/v1/invitations/{token}/` | Preview: organization name, masked address, expiry, next step | Public (token) |
+| `POST /api/v1/invitations/{token}/accept/` | Accept (existing account: bearer; new account: `full_name`, `password`) | Public (token) |
+
+The public routes return the same `404 invitation_invalid` for every unusable token, are rate
+limited per IP, and are sent with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 
 ## Audit log
 
@@ -380,7 +418,9 @@ All configuration comes from environment variables (see [`.env.example`](.env.ex
 | `DJANGO_JWT_ISSUER` / `DJANGO_JWT_AUDIENCE` | unset | Optional `iss`/`aud` claims, enforced when set |
 | `DJANGO_PASSWORD_MIN_LENGTH` | `12` | Minimum password length (production refuses less than 12) |
 | `DJANGO_PASSWORD_RESET_TIMEOUT` | `3600` | Reset-link lifetime in seconds |
-| `AEMS_FRONTEND_BASE_URL` | `http://localhost:3000` | Base URL used in password-reset links |
+| `AEMS_FRONTEND_BASE_URL` | `http://localhost:3000` | Base URL of password-reset and invitation links; production requires `https://` |
+| `AEMS_INVITATION_TTL_SECONDS` | `604800` (7 days) | Invitation lifetime |
+| `AEMS_INVITATION_EMAIL_MAX_ATTEMPTS` | `5` | Delivery attempts before a queued invitation email is marked failed |
 | `AEMS_PASSWORD_RESET_EMAIL_TTL_SECONDS` | `900` | Queued reset emails not sent within this time are discarded |
 | `AEMS_PASSWORD_RESET_EMAIL_MAX_ATTEMPTS` | `5` | Delivery attempts before a queued email is marked failed |
 | `DJANGO_AUTH_REFRESH_COOKIE_SECURE` | `true` (`false` in local settings) | Secure flag on the refresh cookie (production requires `true`) |
@@ -432,7 +472,7 @@ push to `main`, with no path filters ([ADR-0011](docs/adr/0011-continuous-integr
 | Tests & migrations | PostgreSQL 17, owner and runtime roles (neither superuser), fresh migrate as owner, no default auth tables, runtime privileges verified, migration drift, full suite with 90% branch coverage (including runtime-role privilege tests), coverage artifact |
 | Security | Bandit, pip-audit, detect-secrets, production `check --deploy` |
 | API contract | OpenAPI generation, validation and drift check |
-| Docker image | clean build of the committed Dockerfile, non-root, container becomes `healthy`, endpoint behaviour |
+| Docker image | clean build of the committed Dockerfile, non-root, container becomes `healthy`, endpoint behaviour, password reset and initial Owner onboarding through Mailpit, audit and RBAC database safeguards |
 | Backend CI result | passes only if every job above passed (recommended required check) |
 
 ## Contributing

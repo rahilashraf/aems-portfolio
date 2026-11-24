@@ -32,6 +32,10 @@ password change, logout and deactivation, and abuse protection that is correct u
   DRF throttles are kept only as a coarse outer layer because their cache read-modify-write is
   not atomic.
 - **Invitations**: existing users must be authenticated as the invited email to accept.
+  Implemented in Batch 7 ([ADR-0018](0018-invitations-and-onboarding.md)): bearer authentication
+  for existing accounts (no password on the acceptance endpoint); new accounts are created with
+  the invitation's address, password validators and Argon2; invitation tokens are 256-bit,
+  stored as SHA-256 digests and delivered only in the URL fragment of the emailed link.
 - SimpleJWT supplies token encoding/validation primitives; its blacklist app is not used because
   the session model supersedes it.
 

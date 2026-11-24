@@ -24,3 +24,4 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0015](0015-organizations-and-tenancy-implementation.md) | Organizations and tenancy implementation | Accepted |
 | [0016](0016-durable-audit-logging.md) | Durable audit logging, database roles and audit APIs | Accepted |
 | [0017](0017-organization-rbac-implementation.md) | Organization RBAC implementation | Accepted |
+| [0018](0018-invitations-and-onboarding.md) | Invitations and organization onboarding | Accepted |
