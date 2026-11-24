@@ -115,7 +115,7 @@ def update_organization(
 ) -> Organization:
     """Platform administration update (``PATCH /platform/organizations/{id}/``)."""
     with transaction.atomic():
-        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
         previous_status = locked.status
         new_status = changes.get("status", previous_status)
         if new_status != previous_status and (
@@ -157,7 +157,7 @@ def update_organization_profile(
     cannot be used (ADR-0017).
     """
     with transaction.atomic():
-        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
         if locked.status != OrganizationStatus.ACTIVE:
             raise OrganizationStatusTransitionError()
         rbac.require_fresh_permission(locked, actor, "organization.update")

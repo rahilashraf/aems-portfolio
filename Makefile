@@ -164,7 +164,8 @@ deploy-check: ## Django deployment checklist against production settings
 	DJANGO_SECRET_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_JWT_SIGNING_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_ALLOWED_HOSTS=api.example.org AEMS_FRONTEND_BASE_URL=https://app.example.org \
-	DATABASE_URL=postgres://u:p@localhost:5432/db \
+	DATABASE_URL=postgres://u:p@localhost:5432/db EMAIL_URL=smtp+tls://mail.example.org:587 \
+	DJANGO_CSRF_TRUSTED_ORIGINS=https://app.example.org \
 	$(UV) run python manage.py check --deploy --fail-level WARNING
 
 qa: lint typecheck test security audit secrets check-migrations schema-check deploy-check ## Run every quality gate

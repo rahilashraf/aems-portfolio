@@ -40,6 +40,7 @@ from apps.accounts.outbox import (
     DeliveryReport,
     FailureCategory,
     Outcome,
+    attempts_exhausted,
     categorize,
 )
 from apps.audit import services as audit
@@ -186,6 +187,17 @@ def _send(invitation: Invitation, token: str) -> None:
 
 def deliver_claimed(row: InvitationEmail, *, clock: Clock, config: OutboxSettings) -> Outcome:
     invitation = Invitation.objects.select_related("organization").get(pk=row.invitation_id)
+    if attempts_exhausted(row.attempts, config.max_attempts):
+        # Earlier runs stopped mid-delivery: no new token, no further email (AEMS-024).
+        return _record_failure(
+            row, invitation, FailureCategory.ABANDONED, clock=clock, config=config
+        )
+    return _deliver(row, invitation, clock=clock, config=config)
+
+
+def _deliver(
+    row: InvitationEmail, invitation: Invitation, *, clock: Clock, config: OutboxSettings
+) -> Outcome:
     reason = _undeliverable_reason(invitation, clock())
     if reason is not None:
         return _terminal(row, invitation, Status.CANCELLED, Outcome.CANCELLED, clock, reason)

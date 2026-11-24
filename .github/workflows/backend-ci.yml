@@ -318,6 +318,7 @@ jobs:
             -e DJANGO_BEHIND_TLS_PROXY=true \
             -e DATABASE_URL=postgres://aems_app:ci-only-app-password@aems-db:5432/aems \
             -e EMAIL_URL=smtp://aems-mail:1025 \
+            -e AEMS_EMAIL_ALLOW_UNENCRYPTED_SMTP=true \
             "$IMAGE"
 
       - name: Wait for the image HEALTHCHECK to report healthy

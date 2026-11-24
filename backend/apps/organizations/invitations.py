@@ -249,7 +249,7 @@ def create_invitation(
     """
     address = _normalized_email(email)
     with transaction.atomic():
-        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
         if locked.status != OrganizationStatus.ACTIVE:
             raise OrganizationUnavailableError()
         acting = rbac.authorize_actor(locked, actor, "invitations.manage")
@@ -276,7 +276,7 @@ def revoke_invitation(
     """Revoke a pending invitation. An accepted invitation cannot be revoked (its membership is
     managed through the member APIs), and the database trigger enforces it too."""
     with transaction.atomic():
-        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
         acting = rbac.authorize_actor(locked, actor, "invitations.manage")
         invitation = (
             Invitation.objects.for_organization(locked)
@@ -362,7 +362,7 @@ def reissue_initial_owner_invitation(
     new one, for a provisioning organization only (also for organizations created before
     Batch 7, which have none)."""
     with transaction.atomic():
-        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
         _require_platform_permission(actor)
         if locked.status != OrganizationStatus.PROVISIONING:
             raise OrganizationNotProvisioningError()
@@ -378,7 +378,7 @@ def revoke_initial_owner_invitation(
     *, actor: Any, organization: Organization, client_ip: str | None = None
 ) -> Invitation:
     with transaction.atomic():
-        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
         _require_platform_permission(actor)
         if locked.status != OrganizationStatus.PROVISIONING:
             raise OrganizationNotProvisioningError()
@@ -399,15 +399,16 @@ def pending_initial_owner_invitation(organization: Organization) -> Invitation |
 
 # ------------------------------------------------------------------- public: rate limit
 def check_rate_limit(client_ip: str | None) -> None:
-    from apps.accounts.services import RateLimitedError  # noqa: PLC0415 - avoid import cycle
+    from apps.accounts.services import (  # noqa: PLC0415 - avoid import cycle
+        RateLimitedError,
+        record_rate_limited,
+    )
 
     result = ratelimit.check_all(
         [("invitation_ip", ratelimit.digest("ip", client_ip or "unknown"))]
     )
     if result is not None:
-        audit.record_security_event(
-            "auth.rate_limited", client_ip=client_ip, metadata={"scope": "invitation"}
-        )
+        record_rate_limited(result, scope="invitation", client_ip=client_ip)
         raise RateLimitedError(wait=result.retry_after)
 
 
@@ -528,14 +529,16 @@ def _accept_locked(
     with transaction.atomic():
         # 1. The user row: lock an existing account (as deactivation does) or insert a new one.
         if new_account is None:
-            account = User.objects.select_for_update().get(pk=user_id)
+            account = User.objects.select_for_update(no_key=True).get(pk=user_id)
             if not account.is_active:
                 raise AccountInactiveError()
         else:
             account = _create_account(invitation_id, *new_account)
         # 2. The organization row, 3. the invitation row.
         invitation = Invitation.objects.select_related("organization").get(pk=invitation_id)
-        organization = Organization.objects.select_for_update().get(pk=invitation.organization_id)
+        organization = Organization.objects.select_for_update(no_key=True).get(
+            pk=invitation.organization_id
+        )
         invitation = Invitation.objects.select_for_update().get(pk=invitation_id)
         moment = now()
         if not hmac.compare_digest(invitation.token_hash or "", hash_token(token)):

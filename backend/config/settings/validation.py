@@ -101,3 +101,48 @@ def validate_auth_settings(*, refresh_cookie_secure: bool, password_min_length: 
     if password_min_length < MIN_PRODUCTION_PASSWORD_LENGTH:
         msg = f"DJANGO_PASSWORD_MIN_LENGTH must be at least {MIN_PRODUCTION_PASSWORD_LENGTH}."
         raise ImproperlyConfigured(msg)
+
+
+SMTP_EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+
+
+def validate_email_settings(
+    *, backend: str, use_tls: bool, use_ssl: bool, allow_unencrypted: bool
+) -> None:
+    """Production email must really be sent, over an encrypted connection (AEMS-023).
+
+    Invitation and password-reset emails carry one-time credentials. The console, file, in-memory
+    and dummy backends would write them to logs or files (or drop them) while the outboxes record
+    them as delivered, so only SMTP is accepted. Plain SMTP needs an explicit opt-in, intended for
+    an isolated test network (the CI container sends to Mailpit).
+    """
+    if backend != SMTP_EMAIL_BACKEND:
+        msg = (
+            "EMAIL_URL must configure SMTP in production (smtp+tls:// or smtps://); "
+            f"{backend!r} would not deliver one-time links safely."
+        )
+        raise ImproperlyConfigured(msg)
+    if not (use_tls or use_ssl) and not allow_unencrypted:
+        msg = (
+            "EMAIL_URL must use an encrypted SMTP connection in production (smtp+tls:// or "
+            "smtps://). Set AEMS_EMAIL_ALLOW_UNENCRYPTED_SMTP=true only on an isolated test "
+            "network."
+        )
+        raise ImproperlyConfigured(msg)
+
+
+def validate_csrf_trusted_origins(origins: Sequence[str]) -> None:
+    """Production CSRF trusted origins: explicit https origins only, no wildcards (AEMS-026)."""
+    for origin in origins:
+        parts = urlsplit(origin)
+        if parts.scheme != "https" or not parts.netloc or "*" in origin:
+            msg = (
+                f"Invalid CSRF trusted origin {origin!r}: production accepts explicit "
+                "https://host[:port] origins only (no http, no wildcards)."
+            )
+            raise ImproperlyConfigured(msg)
+        if parts.path not in ("", "/") or parts.query or parts.fragment:
+            msg = (
+                f"Invalid CSRF trusted origin {origin!r}: an origin has no path, query or fragment."
+            )
+            raise ImproperlyConfigured(msg)

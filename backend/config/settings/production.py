@@ -12,7 +12,11 @@ from .base import (
     AUTH_PASSWORD_MIN_LENGTH,
     AUTH_REFRESH_COOKIE,
     CORS_ALLOWED_ORIGINS,
+    CSRF_TRUSTED_ORIGINS,
     DEBUG,
+    EMAIL_BACKEND,
+    EMAIL_USE_SSL,
+    EMAIL_USE_TLS,
     FRONTEND_BASE_URL,
     JWT_SIGNING_KEY,
     SECRET_KEY,
@@ -21,6 +25,8 @@ from .base import (
 from .validation import (
     validate_auth_settings,
     validate_cors_origins,
+    validate_csrf_trusted_origins,
+    validate_email_settings,
     validate_jwt_signing_key,
     validate_production_settings,
 )
@@ -33,6 +39,14 @@ validate_jwt_signing_key(JWT_SIGNING_KEY, secret_key=SECRET_KEY)
 validate_auth_settings(
     refresh_cookie_secure=bool(AUTH_REFRESH_COOKIE["SECURE"]),
     password_min_length=AUTH_PASSWORD_MIN_LENGTH,
+)
+
+validate_csrf_trusted_origins(CSRF_TRUSTED_ORIGINS)
+validate_email_settings(
+    backend=EMAIL_BACKEND,
+    use_tls=EMAIL_USE_TLS,
+    use_ssl=EMAIL_USE_SSL,
+    allow_unencrypted=env.bool("AEMS_EMAIL_ALLOW_UNENCRYPTED_SMTP", default=False),
 )
 
 # Emailed invitation and password-reset links carry one-time credentials: never over plain HTTP.

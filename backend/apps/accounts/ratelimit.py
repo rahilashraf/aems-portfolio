@@ -13,7 +13,7 @@
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from django.conf import settings
@@ -66,6 +66,10 @@ class RateLimitResult:
     allowed: bool
     count: int
     retry_after: int
+    # True only for the first refused attempt of a window. Callers record a durable audit event
+    # for that one and log the rest, so refused floods cannot grow the append-only audit table
+    # without bound (review finding AEMS-025).
+    first_denial: bool = False
 
 
 def hit(scope: str, key_digest: str, now: datetime | None = None) -> RateLimitResult:
@@ -82,7 +86,10 @@ def hit(scope: str, key_digest: str, now: datetime | None = None) -> RateLimitRe
     count = int(row[0]) if row else 1
     retry_after = max(1, math.ceil((window_end - now).total_seconds()))
     return RateLimitResult(
-        allowed=count <= limit.max_attempts, count=count, retry_after=retry_after
+        allowed=count <= limit.max_attempts,
+        count=count,
+        retry_after=retry_after,
+        first_denial=count == limit.max_attempts + 1,
     )
 
 
@@ -92,7 +99,8 @@ def check_all(hits: list[tuple[str, str]], now: datetime | None = None) -> RateL
     exceeded = [r for r in (hit(scope, key, now) for scope, key in hits) if not r.allowed]
     if not exceeded:
         return None
-    return max(exceeded, key=lambda r: r.retry_after)
+    longest = max(exceeded, key=lambda r: r.retry_after)
+    return replace(longest, first_denial=any(r.first_denial for r in exceeded))
 
 
 # --------------------------------------------------------------------------- account backoff

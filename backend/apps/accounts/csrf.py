@@ -15,6 +15,10 @@ from rest_framework.authentication import CSRFCheck
 
 from apps.audit import services as audit
 from apps.core.api.exceptions import DomainError
+from apps.core.net import client_ip
+from apps.core.security_events import log_security_event
+
+from . import ratelimit
 
 
 class CsrfFailedError(DomainError):
@@ -33,5 +37,19 @@ def enforce_csrf(request: Any) -> None:
     check.process_request(django_request)
     reason = check.process_view(django_request, _noop, (), {})
     if reason:
-        audit.record_security_event("auth.csrf.failed", metadata={"reason": str(reason)})
+        _record_failure(django_request, str(reason))
         raise CsrfFailedError()
+
+
+def _record_failure(request: HttpRequest, reason: str) -> None:
+    """Durable ``auth.csrf.failed`` within the per-IP budget, a log line beyond it (AEMS-025).
+
+    The cookie endpoints are public, so without a budget anyone could append audit rows at will.
+    The response (403) is the same either way.
+    """
+    ip = client_ip(request)
+    within_budget = ratelimit.hit("csrf_failure_ip", ratelimit.digest("ip", ip or "unknown"))
+    if within_budget.allowed:
+        audit.record_security_event("auth.csrf.failed", client_ip=ip, metadata={"reason": reason})
+    else:
+        log_security_event("auth.csrf.failed", outcome="failure", client_ip=ip, repeated=True)

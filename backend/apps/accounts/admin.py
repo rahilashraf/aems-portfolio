@@ -5,6 +5,12 @@
   the dedicated admin password-change view, which also revokes every session of that user.
 - Only superusers may change ``is_staff``, ``is_superuser``, groups or permissions, so staff cannot
   escalate themselves or others.
+- Only superusers may change (or set the password of) a staff or superuser account at all
+  (review finding AEMS-021): otherwise a staff member holding ``accounts.change_user`` could take
+  over a more privileged account by changing its password or email address.
+- Accounts and sessions are never deleted through the admin: accounts are deactivated through the
+  service, sessions are revoked (both audited). Deleting rows would bypass both.
+- Email changes are audited (AEMS-022).
 - Deactivating an account (clearing ``is_active``) goes through ``services.deactivate_user``, which
   revokes all of its sessions. Batch 6 adds the last-active-Owner check to that service; there is
   deliberately no other deactivation path.
@@ -149,7 +155,7 @@ class UserChangeForm(forms.ModelForm):  # type: ignore[type-arg]
 _admin_actor: ContextVar[User | None] = ContextVar("aems_admin_actor", default=None)
 
 # User fields whose changes through the admin are audited (values are not secret).
-AUDITED_ACCOUNT_FIELDS = ("full_name", "is_active", "is_staff", "is_superuser")
+AUDITED_ACCOUNT_FIELDS = ("email", "full_name", "is_active", "is_staff", "is_superuser")
 AUDITED_ACCOUNT_RELATIONS = ("groups", "user_permissions")
 
 
@@ -191,6 +197,21 @@ class UserAdmin(DjangoUserAdmin):  # type: ignore[type-arg]
     add_fieldsets = (
         (None, {"classes": ("wide",), "fields": ("email", "full_name", "password1", "password2")}),
     )
+
+    def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        """Staff and superuser accounts can be changed by superusers only (AEMS-021).
+
+        Also governs the admin password view, which checks ``has_change_permission`` for the
+        target account.
+        """
+        if not super().has_change_permission(request, obj):
+            return False
+        if obj is None or getattr(request.user, "is_superuser", False):
+            return True
+        return not (obj.is_staff or obj.is_superuser)
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False  # deactivate instead (audited, Owner invariant, session revocation)
 
     def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> tuple[str, ...]:
         fields = tuple(super().get_readonly_fields(request, obj))
@@ -280,6 +301,9 @@ class AuthSessionAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
 
     def has_change_permission(self, request: HttpRequest, obj: Any = None) -> bool:
         return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Any = None) -> bool:
+        return False  # revoke instead: deletion would erase the replay-detection evidence
 
     def has_revoke_permission(self, request: HttpRequest) -> bool:
         return bool(getattr(request.user, "is_superuser", False))
