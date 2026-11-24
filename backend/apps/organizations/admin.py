@@ -10,7 +10,7 @@ from typing import Any
 from django.contrib import admin
 from django.http import HttpRequest
 
-from .models import Membership, Organization
+from .models import Invitation, Membership, Organization
 
 
 class ReadOnlyAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
@@ -37,3 +37,14 @@ class MembershipAdmin(ReadOnlyAdmin):
     list_display = ("id", "organization", "status", "joined_at")
     list_filter = ("status",)
     ordering = ("-joined_at",)
+
+
+@admin.register(Invitation)
+class InvitationAdmin(ReadOnlyAdmin):
+    """Read-only. The token digest is never displayed; invitations change only through services."""
+
+    list_display = ("id", "organization", "status", "is_initial_owner", "created_at", "expires_at")
+    list_filter = ("status", "is_initial_owner")
+    exclude = ("token_hash",)
+    ordering = ("-created_at",)
+    actions = None

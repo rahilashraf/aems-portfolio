@@ -21,6 +21,7 @@ from django.db import IntegrityError, transaction
 from apps.audit import services as audit
 from apps.rbac import services as rbac
 
+from . import invitations
 from .exceptions import OrganizationSlugTakenError, OrganizationStatusTransitionError
 from .models import ORGANIZATION_SLUG_UNIQUE, Organization, OrganizationStatus
 
@@ -45,9 +46,16 @@ def create_organization(
     name: str,
     slug: str,
     organization_type: str,
+    initial_owner_email: str,
     timezone: str = "UTC",
     client_ip: str | None = None,
 ) -> Organization:
+    """Create a ``provisioning`` organization, its system roles and its initial Owner invitation.
+
+    One transaction: if seeding, the invitation, its email outbox row or an audit record fails,
+    nothing is created. The creator does not become a member, and the organization stays
+    ``provisioning`` until the invitation is accepted (ADR-0018).
+    """
     organization = Organization(
         name=name,
         slug=slug,
@@ -70,6 +78,12 @@ def create_organization(
                 target_id=organization.pk,
                 client_ip=client_ip,
                 metadata={"status": organization.status},
+            )
+            invitations.issue_initial_owner_invitation(
+                actor=actor,
+                organization=organization,
+                email=initial_owner_email,
+                client_ip=client_ip,
             )
     except IntegrityError as exc:
         if _is_slug_violation(exc):

@@ -163,7 +163,7 @@ deploy-check: ## Django deployment checklist against production settings
 	DJANGO_API_DOCS_ENABLED=false DJANGO_CORS_ALLOWED_ORIGINS= DJANGO_LOG_FORMAT=json \
 	DJANGO_SECRET_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
 	DJANGO_JWT_SIGNING_KEY="$$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
-	DJANGO_ALLOWED_HOSTS=api.example.org \
+	DJANGO_ALLOWED_HOSTS=api.example.org AEMS_FRONTEND_BASE_URL=https://app.example.org \
 	DATABASE_URL=postgres://u:p@localhost:5432/db \
 	$(UV) run python manage.py check --deploy --fail-level WARNING
 

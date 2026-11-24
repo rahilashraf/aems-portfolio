@@ -702,6 +702,149 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/invitations/{token}/:
+    get:
+      operationId: invitations_preview
+      description: Public. Returns the organization name, the masked invited address,
+        the expiry and the next step. Unknown, expired, revoked and used tokens all
+        answer the same 404 `invitation_invalid`. Whether an account exists for the
+        address is not revealed.
+      summary: Preview an invitation
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        description: The invitation token from the emailed link. Treat it as a credential.
+        required: true
+      tags:
+      - invitations
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationPreview'
+          description: ''
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/invitations/{token}/accept/:
+    post:
+      operationId: invitations_accept
+      description: Public. If an account exists for the invited address, sign in as
+        that account (bearer token) and send an empty body; otherwise 401 `sign_in_required`,
+        and another signed-in account gets 403 `invitation_email_mismatch`. If no
+        account exists, send `full_name` and `password` to create it with the invited
+        address. Membership, roles, invitation consumption and, for the initial Owner,
+        organization activation happen in one transaction.
+      summary: Accept an invitation
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        description: The invitation token from the emailed link. Treat it as a credential.
+        required: true
+      tags:
+      - invitations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationAcceptRequest'
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationAccepted'
+          description: ''
+        '400':
+          description: Bad Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '415':
+          description: Unsupported Media Type
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
   /api/v1/organizations/:
     get:
       operationId: organizations_list
@@ -911,6 +1054,214 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditLog'
+          description: ''
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/organizations/{org_id}/invitations/:
+    get:
+      operationId: organization_invitations_list
+      description: 'Requires `invitations.manage`. Safe metadata only: tokens and
+        their digests are never returned. `status` reports `expired` for pending invitations
+        past their expiry.'
+      summary: List invitations
+      parameters:
+      - in: path
+        name: org_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - organization access
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      operationId: organization_invitations_create
+      description: Requires `invitations.manage`. `role_ids` must be roles of this
+        organization whose permissions you hold; only Owners can invite with the Owner
+        role. An existing member (409 `already_member`) or an address with a pending
+        invitation (409 `invitation_already_pending`; revoke it first) cannot be invited.
+        The email is sent asynchronously; `delivery_status` starts as `pending`.
+      summary: Invite someone
+      parameters:
+      - in: path
+        name: org_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - organization access
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationCreateRequest'
+        required: true
+      security:
+      - bearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+        '400':
+          description: Bad Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '415':
+          description: Unsupported Media Type
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/organizations/{org_id}/invitations/{invitation_id}/revoke/:
+    post:
+      operationId: organization_invitations_revoke
+      description: 'Requires `invitations.manage` and the permissions the invitation
+        grants (Owner invitations: Owners only). Only pending invitations can be revoked
+        (409 `invitation_not_pending`); revoking never affects an accepted membership.'
+      summary: Revoke an invitation
+      parameters:
+      - in: path
+        name: invitation_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      - in: path
+        name: org_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - organization access
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
           description: ''
         '401':
           description: Unauthorized
@@ -2080,8 +2431,229 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/platform/organizations/{organization_id}/initial-owner-invitation/:
+    get:
+      operationId: platform_initial_owner_invitation_retrieve
+      description: |-
+        Mixin for every DRF view: refuse unauthenticated access to non-allowlisted endpoints.
+
+        Runs after DRF's own permission checks, whatever produced them (class attributes,
+        ``get_permissions()`` overrides, ViewSet actions or custom permission classes).
+      summary: The pending initial Owner invitation
+      parameters:
+      - in: path
+        name: organization_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - platform
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      operationId: platform_initial_owner_invitation_issue
+      description: Provisioning organizations only (409 `organization_not_provisioning`).
+        Revokes the pending initial Owner invitation, if any, and issues a new one
+        to `email`. Requires the `organizations.manage_initial_owner_invitation` permission.
+      summary: Issue or reissue the initial Owner invitation
+      parameters:
+      - in: path
+        name: organization_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - platform
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitialOwnerInvitationRequest'
+        required: true
+      security:
+      - bearerAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+        '400':
+          description: Bad Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '415':
+          description: Unsupported Media Type
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+  /api/v1/platform/organizations/{organization_id}/initial-owner-invitation/revoke/:
+    post:
+      operationId: platform_initial_owner_invitation_revoke
+      description: |-
+        Mixin for every DRF view: refuse unauthenticated access to non-allowlisted endpoints.
+
+        Runs after DRF's own permission checks, whatever produced them (class attributes,
+        ``get_permissions()`` overrides, ViewSet actions or custom permission classes).
+      summary: Revoke the pending initial Owner invitation
+      parameters:
+      - in: path
+        name: organization_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - platform
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+        '401':
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '406':
+          description: Not Acceptable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Too Many Requests
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
 components:
   schemas:
+    AcceptedOrganization:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        status:
+          type: string
+          readOnly: true
+      required:
+      - id
+      - name
+      - status
     ApiRoot:
       type: object
       properties:
@@ -2210,6 +2782,191 @@ components:
           type: string
       required:
       - detail
+    InitialOwnerInvitationRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+      required:
+      - email
+    Invitation:
+      type: object
+      description: Safe metadata for managers. Never the token or its digest.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        roles:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        status:
+          type: string
+          readOnly: true
+        is_initial_owner:
+          type: boolean
+          readOnly: true
+        invited_by:
+          type: string
+          format: uuid
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+        accepted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        accepted_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        delivery_status:
+          type: string
+          nullable: true
+          readOnly: true
+      required:
+      - accepted_at
+      - accepted_by
+      - created_at
+      - delivery_status
+      - email
+      - expires_at
+      - id
+      - invited_by
+      - is_initial_owner
+      - organization
+      - revoked_at
+      - roles
+      - status
+    InvitationAcceptRequest:
+      type: object
+      description: |-
+        New accounts only: full name and password. Signed-in invitees send an empty body.
+
+        The address always comes from the invitation; ``email`` and privilege fields are rejected.
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 4096
+    InvitationAccepted:
+      type: object
+      properties:
+        organization:
+          allOf:
+          - $ref: '#/components/schemas/AcceptedOrganization'
+          readOnly: true
+        membership:
+          allOf:
+          - $ref: '#/components/schemas/MembershipSummary'
+          readOnly: true
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvitationRole'
+          readOnly: true
+        account_created:
+          type: boolean
+          readOnly: true
+      required:
+      - account_created
+      - membership
+      - organization
+      - roles
+    InvitationCreateRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
+        role_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+      required:
+      - email
+      - role_ids
+    InvitationPreview:
+      type: object
+      properties:
+        organization_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          readOnly: true
+          description: Masked invited address.
+        status:
+          type: string
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+        next_step:
+          allOf:
+          - $ref: '#/components/schemas/NextStepEnum'
+          readOnly: true
+      required:
+      - email
+      - expires_at
+      - next_step
+      - organization_name
+      - status
+    InvitationRole:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        system_key:
+          type: string
+          readOnly: true
+          nullable: true
+      required:
+      - id
+      - name
+      - system_key
     LoginRequest:
       type: object
       properties:
@@ -2366,6 +3123,14 @@ components:
       - id
       - name
       - system_key
+    NextStepEnum:
+      enum:
+      - accept
+      - sign_in_or_create_account
+      type: string
+      description: |-
+        * `accept` - accept
+        * `sign_in_or_create_account` - sign_in_or_create_account
     NullEnum:
       enum:
       - null
@@ -2635,7 +3400,13 @@ components:
           minLength: 1
           default: UTC
           maxLength: 64
+        initial_owner_email:
+          type: string
+          format: email
+          minLength: 1
+          maxLength: 254
       required:
+      - initial_owner_email
       - name
       - organization_type
       - slug

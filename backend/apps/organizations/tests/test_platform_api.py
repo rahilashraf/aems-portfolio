@@ -16,7 +16,12 @@ from .conftest import Api, World, add_default_member, error_fields
 
 pytestmark = pytest.mark.django_db
 LIST_URL = "/api/v1/platform/organizations/"
-NEW_ORG = {"name": "Northfield Academy", "slug": "Northfield", "organization_type": "school"}
+NEW_ORG = {
+    "name": "Northfield Academy",
+    "slug": "Northfield",
+    "organization_type": "school",
+    "initial_owner_email": "head@northfield.example.org",
+}
 
 
 def detail(organization: Organization) -> str:

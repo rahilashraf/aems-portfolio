@@ -13,6 +13,7 @@ from .base import (
     AUTH_REFRESH_COOKIE,
     CORS_ALLOWED_ORIGINS,
     DEBUG,
+    FRONTEND_BASE_URL,
     JWT_SIGNING_KEY,
     SECRET_KEY,
     env,
@@ -33,6 +34,11 @@ validate_auth_settings(
     refresh_cookie_secure=bool(AUTH_REFRESH_COOKIE["SECURE"]),
     password_min_length=AUTH_PASSWORD_MIN_LENGTH,
 )
+
+# Emailed invitation and password-reset links carry one-time credentials: never over plain HTTP.
+if not FRONTEND_BASE_URL.startswith("https://"):
+    msg = "AEMS_FRONTEND_BASE_URL must be an https:// origin in production."
+    raise ImproperlyConfigured(msg)
 
 # API documentation stays disabled in production until staff authentication and authorization
 # exist. Asking for it is a configuration error rather than something to silently ignore.

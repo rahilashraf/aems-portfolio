@@ -16,7 +16,7 @@ from apps.audit.models import AuditLog
 from apps.organizations.models import Organization, OrganizationStatus
 from apps.organizations.tests.conftest import Api, bearer
 
-from .conftest import Team, member, url
+from .conftest import Team, member, role, url
 
 pytestmark = pytest.mark.django_db
 
@@ -28,6 +28,27 @@ class Endpoint:
     path: Callable[[Team, Any], str]
     permission: str | None  # None: any active member (read-only member action)
     body: Callable[[Team], Any] | None = None
+
+
+def _pending_invitation(team: Team) -> Any:
+    """A pending invitation granting Member (built directly: the organization may be closed)."""
+    from datetime import timedelta  # noqa: PLC0415
+
+    from django.utils import timezone  # noqa: PLC0415
+
+    from apps.organizations.models import Invitation, InvitationRole  # noqa: PLC0415
+
+    invitation, created = Invitation.objects.get_or_create(
+        organization=team.org,
+        email="pending@example.org",
+        status="pending",
+        defaults={"invited_by": team.owner, "expires_at": timezone.now() + timedelta(days=7)},
+    )
+    if created:
+        InvitationRole(
+            organization=team.org, invitation=invitation, role=role(team.org, "member")
+        ).save()
+    return invitation
 
 
 def _victim(team: Team) -> Any:
@@ -86,6 +107,23 @@ ENDPOINTS = [
         "role-delete", "delete", lambda t, v: url(t.org, f"roles/{t.auditors.pk}/"), "roles.manage"
     ),
     Endpoint("permissions", "get", lambda t, v: url(t.org, "permissions/"), "roles.view"),
+    # Batch 7 invitations.
+    Endpoint(
+        "invitations-list", "get", lambda t, v: url(t.org, "invitations/"), "invitations.manage"
+    ),
+    Endpoint(
+        "invitation-create",
+        "post",
+        lambda t, v: url(t.org, "invitations/"),
+        "invitations.manage",
+        lambda t: {"email": "new@example.org", "role_ids": [str(role(t.org, "member").pk)]},
+    ),
+    Endpoint(
+        "invitation-revoke",
+        "post",
+        lambda t, v: url(t.org, f"invitations/{_pending_invitation(t).pk}/revoke/"),
+        "invitations.manage",
+    ),
 ]
 ROLE_HOLDERS = {
     "owner": None,  # all permissions

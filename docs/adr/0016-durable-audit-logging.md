@@ -213,6 +213,19 @@ embedded credentials.
   `permissions_added`, `permissions_removed` (metadata) and `role.name`, `role.description`,
   `membership.status` (changes).
 
+## Batch 7 integration (ADR-0018)
+- Invitation and onboarding events, recorded in the mutation transaction:
+  - `invitation.created`, `invitation.initial_owner_issued`, `invitation.revoked`,
+    `invitation.expired`, `invitation.accepted`;
+  - `invitation.email_delivered`, `invitation.delivery_failed`, `invitation.delivery_cancelled`;
+  - `rbac.membership.created`, `rbac.membership.roles_assigned`, `rbac.owner.granted`;
+  - `organization.activated`;
+  - `auth.account.created` (`reason: invitation`).
+- Independent: `invitation.accept_rejected`, `invitation.delivery_lease_lost`,
+  `auth.rate_limited` (`scope: invitation`).
+- New metadata keys: `invitation_id`, `initial_owner`, `account_created`. Addresses, tokens,
+  digests, links and passwords are never recorded.
+
 ## Consequences
 - **Durability:** every listed mutation commits with its audit row or not at all.
 - **Cost:** independent security events cost one short transaction each.

@@ -3,7 +3,7 @@ from django.urls import path
 from apps.audit.api.views import OrganizationAuditLogListView
 from apps.rbac.api import views as rbac_views
 
-from . import views
+from . import invitation_views, views
 
 app_name = "organizations"
 
@@ -30,4 +30,14 @@ urlpatterns = [
         name="role-detail",
     ),
     path("<uuid:org_id>/permissions/", rbac_views.PermissionListView.as_view(), name="permissions"),
+    path(
+        "<uuid:org_id>/invitations/",
+        invitation_views.InvitationListView.as_view(),
+        name="invitations",
+    ),
+    path(
+        "<uuid:org_id>/invitations/<uuid:invitation_id>/revoke/",
+        invitation_views.InvitationRevokeView.as_view(),
+        name="invitation-revoke",
+    ),
 ]

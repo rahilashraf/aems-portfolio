@@ -188,6 +188,9 @@ API_PUBLIC_ENDPOINTS: tuple[str, ...] = (
     "api-v1:auth:logout",
     "api-v1:auth:password-reset",
     "api-v1:auth:password-reset-confirm",
+    # Invitations (Batch 7): token-scoped preview and acceptance (ADR-0018).
+    "api-v1:invitations:preview",
+    "api-v1:invitations:accept",
 )
 
 # OpenAPI documentation endpoints. Off unless explicitly enabled; production forces it off.
@@ -265,6 +268,19 @@ PASSWORD_RESET_OUTBOX: dict[str, int] = {
     "max_batch_size": 1000,
 }
 
+# Invitations (ADR-0018). The token travels in the URL fragment of the emailed link.
+INVITATION_TTL_SECONDS: int = env.int("AEMS_INVITATION_TTL_SECONDS", default=7 * 24 * 3600)
+INVITATION_URL_TEMPLATE: str = FRONTEND_BASE_URL.rstrip("/") + "/invitations/accept#token={token}"
+# Invitation email outbox. `deliver_invitation_emails` sends; run it regularly (e.g. every minute).
+INVITATION_OUTBOX: dict[str, int] = {
+    "max_attempts": env.int("AEMS_INVITATION_EMAIL_MAX_ATTEMPTS", default=5),
+    "backoff_base_seconds": 60,
+    "backoff_cap_seconds": 900,
+    # Must exceed EMAIL_TIMEOUT: one claim covers one SMTP exchange.
+    "lease_seconds": 120,
+    "max_batch_size": 1000,
+}
+
 # JWT (SimpleJWT primitives) signed with a dedicated key, never SECRET_KEY.
 JWT_SIGNING_KEY: str = env.str("DJANGO_JWT_SIGNING_KEY")
 _JWT_KIND_CLAIM = "type"  # claim that distinguishes access from refresh tokens
@@ -310,6 +326,8 @@ AUTH_RATE_LIMITS: dict[str, tuple[int, int]] = {
     "password_reset_account": (3, 3600),
     "password_reset_confirm_ip": (20, 3600),
     "password_change_user": (10, 3600),
+    # Public invitation preview and acceptance (token-scoped routes).
+    "invitation_ip": (60, 300),
 }
 # Temporary exponential account backoff after consecutive failures (capped).
 AUTH_LOGIN_BACKOFF: dict[str, int] = {"threshold": 5, "base_seconds": 30, "cap_seconds": 900}

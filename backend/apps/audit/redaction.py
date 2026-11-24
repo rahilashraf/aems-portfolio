@@ -126,6 +126,10 @@ METADATA_FIELDS: dict[str, Validator] = {
     "roles_removed": _uuid_list,
     "permissions_added": _identifier_list,
     "permissions_removed": _identifier_list,
+    # Invitations (Batch 7): identifiers and flags only, never addresses or tokens.
+    "invitation_id": _uuid,
+    "initial_owner": _bool,
+    "account_created": _bool,
 }
 
 #: Fields whose changes may be recorded, per target type.

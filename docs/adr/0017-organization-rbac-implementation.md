@@ -22,7 +22,7 @@ permission engine, member and role management, and the Owner invariant, under co
   - `rbac`: `roles.view`, `roles.manage`;
   - `audit`: `audit.view`.
 
-  `invitations.manage` is registered for Batch 7 and gates nothing yet.
+  `invitations.manage` gates the Batch 7 invitation endpoints (ADR-0018).
 - **Definition.** Code (`<category>.<action>`, immutable), description, category and a
   deprecation flag.
 - **Conflicts.** Registering a code twice with a different definition fails at startup. Invalid
@@ -231,7 +231,7 @@ action like every other tenant read:
    - the initial Owner invitation and `provisioning → active`: Batch 7;
    - self-service leaving of an organization.
 
-## Batch 7 dependencies
+## Batch 7 dependencies (implemented, ADR-0018)
 - **Invitation acceptance:**
   - lock the accepting user row **before** the organization row (lock order);
   - create the membership and its roles through the same validation;
@@ -239,6 +239,8 @@ action like every other tenant read:
     transaction, with audit records.
 - **Invitations carrying roles:** `invitations.manage` plus the delegation rules at creation, and
   again at acceptance under the organization lock.
+- **Role deletion:** a role that a pending invitation would grant cannot be deleted
+  (409 `role_in_use`).
 - **Reactivation:** `suspended → active`, if added, must verify an active Owner under the
   organization lock.
 

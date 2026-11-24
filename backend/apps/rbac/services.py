@@ -46,6 +46,8 @@ from rest_framework import exceptions
 from apps.accounts.models import User
 from apps.audit import services as audit
 from apps.organizations.models import (
+    InvitationRole,
+    InvitationStatus,
     Membership,
     MembershipStatus,
     Organization,
@@ -540,6 +542,8 @@ def delete_role(
             raise SystemRoleProtectedError()
         if MembershipRole.objects.for_organization(locked_org).filter(role=role).exists():
             raise RoleInUseError()
+        if _pending_invitations_granting(locked_org, role):
+            raise RoleInUseError()
         codes = sorted(_active_role_codes(role))
         role_pk, name = role.pk, role.name
         role.permissions.clear()
@@ -559,8 +563,59 @@ def delete_role(
 # --------------------------------------------------------------- organization integration
 def require_fresh_permission(organization: Organization, actor: Any, code: str) -> None:
     """For services outside this app: call after locking ``organization`` in the transaction."""
+    authorize_actor(organization, actor, code)
+
+
+def authorize_actor(organization: Organization, actor: Any, *codes: str) -> Actor:
+    """Lock the actor's membership and require ``codes`` from fresh state (organization locked)."""
     acting, _ = _lock_actor_and_targets(organization, actor)
-    acting.require(code)
+    acting.require(*codes)
+    return acting
+
+
+def check_can_grant(actor: Actor, roles: Iterable[Role]) -> None:
+    """Delegation for granting ``roles`` (invitations): Owner only by Owners, permissions held."""
+    permissions, owner = _authority(roles)
+    if owner and not actor.is_owner:
+        raise OwnerRoleRestrictedError()
+    if not permissions <= actor.permissions:
+        raise DelegationError()
+
+
+def inviter_still_authorized(
+    organization: Organization, inviter_id: Any, roles: list[Role]
+) -> bool:
+    """Re-evaluate, from current state, whether the inviter could still issue this invitation.
+
+    Used when an invitation to an active organization is accepted (ADR-0018): the inviter must
+    still be an active member holding ``invitations.manage`` and every permission the roles confer
+    *now*, and an Owner if the Owner role is granted. Call with the organization locked.
+    """
+    membership_id = (
+        Membership.objects.for_organization(organization)
+        .filter(user_id=inviter_id)
+        .values_list("pk", flat=True)
+        .first()
+    )
+    if membership_id is None:
+        return False
+    permissions, is_owner = fresh_permissions(membership_id)
+    granted, owner = _authority(roles)
+    return (
+        "invitations.manage" in permissions and granted <= permissions and (is_owner or not owner)
+    )
+
+
+def active_owner_ids(organization: Organization) -> set[Any]:
+    return _active_owner_ids(organization)
+
+
+def _pending_invitations_granting(organization: Organization, role: Role) -> bool:
+    return (
+        InvitationRole.objects.for_organization(organization)
+        .filter(role=role, invitation__status=InvitationStatus.PENDING)
+        .exists()
+    )
 
 
 # ------------------------------------------------------------------ global deactivation

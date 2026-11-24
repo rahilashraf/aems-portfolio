@@ -42,6 +42,7 @@ def _run(
         "DJANGO_SECRET_KEY": STRONG_KEY,
         "DJANGO_JWT_SIGNING_KEY": "p8V#q2Lm!x7Rz4@kT9w$Hn3^bY6&cJ1*dF5(gS0)aE8-uI2+oP7=lK4_mN9~vB3",
         "DJANGO_ALLOWED_HOSTS": "api.example.org",
+        "AEMS_FRONTEND_BASE_URL": "https://app.example.org",
         "DATABASE_URL": "postgres://u:p@localhost:5432/db",
         **(overrides or {}),
     }
@@ -189,6 +190,20 @@ class TestApiDocsInProduction:
 
         assert result.returncode != 0
         assert "DJANGO_API_DOCS_ENABLED must be false in production" in result.stderr
+
+
+class TestFrontendOriginInProduction:
+    """Emailed invitation and password-reset links are credentials (ADR-0018)."""
+
+    @pytest.mark.parametrize("origin", ["http://app.example.org", "app.example.org", ""])
+    def test_non_https_frontend_is_refused(self, origin: str) -> None:
+        result = _run(overrides={"AEMS_FRONTEND_BASE_URL": origin})
+        assert result.returncode != 0
+        assert "AEMS_FRONTEND_BASE_URL must be an https:// origin" in result.stderr
+
+    def test_unset_frontend_falls_back_to_the_local_default_and_is_refused(self) -> None:
+        result = _run(unset=("AEMS_FRONTEND_BASE_URL",))
+        assert result.returncode != 0
 
 
 class TestCorsInProduction:

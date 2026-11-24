@@ -668,8 +668,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 | 3 — Accounts & authentication | Merged | rahilashraf/aems-portfolio#4 | Review findings AEMS-010/011 and the password-reset outbox resolved before merge |
 | 4 — Organizations & tenancy | Merged | rahilashraf/aems-portfolio#5 | Review findings AEMS-012…014 resolved before merge |
 | 5 — Audit logging | Merged | rahilashraf/aems-portfolio#6 | Review findings AEMS-015/016 resolved before merge |
-| 6 — RBAC | In review | (this batch) | See Batch 6 deviations below |
-| 7–8 | Not started | — | — |
+| 6 — RBAC | Merged | rahilashraf/aems-portfolio#7 | Review finding AEMS-017 resolved before merge |
+| 7 — Invitations | In review | (this batch) | See Batch 7 deviations below |
+| 8 | Not started | — | — |
 
 ### Batch 2 deviations from the original plan
 
@@ -801,3 +802,35 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   - lock the accepting user row before the organization row;
   - apply the delegation rules to roles carried by invitations;
   - assign the initial Owner and activate the organization in one transaction.
+
+### Batch 7 deviations and clarifications (ADR-0018)
+
+- **Tokens are issued when the email is sent** by `deliver_invitation_emails`, not at creation.
+  Only the SHA-256 digest is stored, and every send rotates the token, so only the latest email's
+  link works.
+- **Initial Owner invitation.** `POST /platform/organizations/` requires `initial_owner_email`.
+  Platform administrators reissue or revoke it through
+  `/platform/organizations/{id}/initial-owner-invitation/` with the new
+  `organizations.manage_initial_owner_invitation` permission. This also covers organizations
+  created before Batch 7.
+- **Preview and acceptance are non-enumerating:**
+  - every unusable token gets the same 404 `invitation_invalid`;
+  - the preview never reveals whether an account exists;
+  - acceptance tells the token holder to sign in when one does (§4.6).
+- **Acceptance re-validates the inviter's authority** under the organization lock and fails closed
+  (409 `invitation_authority_revoked`). The invitation stays pending for managers to revoke and
+  reissue.
+- **One pending invitation per address** (409 `invitation_already_pending` until revoked).
+  Expired pending invitations are marked `expired` when replaced.
+- **No session is issued on acceptance**; the new member signs in normally.
+- **Lock order:** user row → organization row → invitation row → new membership and role rows. A
+  new account's row is inserted first. Delivery never holds an organization lock.
+- **Production requires an `https://` frontend origin** for emailed links.
+- **Address ownership is re-checked under the user lock** (review finding AEMS-018): an email
+  change committed while an acceptance waits is rejected.
+- **Historical `InvitationRole` links** of finished invitations are removed when their custom
+  role is later deleted (the role ids remain in the audit log). Documented; open for a decision.
+- **`suspended → active` reactivation is still unavailable**, despite §5.3 (later restrictions
+  forbid new activation paths). Flagged for review.
+- **Deferred:** resending an email without reissuing, retention of old invitations and outbox
+  rows, reactivation.
