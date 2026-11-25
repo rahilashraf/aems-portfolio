@@ -53,7 +53,7 @@ significant being:
 - an admin privilege escalation available to non-superuser staff (AEMS-021);
 - lock-order deadlocks between ownership operations (AEMS-027).
 
-It added a cross-cutting security suite of 588 tests.
+It added a cross-cutting security suite of 591 tests.
 
 ## B. Architecture
 
@@ -188,8 +188,8 @@ are required in CI.
 
 | Measure | Value |
 |---|---|
-| Tests (full suite, this batch) | **2,032 passed**, 0 failed, 0 skipped (Batch 7 baseline, re-measured before the batch: 1,444) |
-| New security suites (`backend/tests/security/`) | 588 tests in 13 modules |
+| Tests (full suite, this batch) | **2,035 passed**, 0 failed, 0 skipped (Batch 7 baseline, re-measured before the batch: 1,444) |
+| New security suites (`backend/tests/security/`) | 591 tests in 13 modules |
 | Branch coverage | **99.60%** (gate: 90%; Batch 7 baseline 99.56%) |
 | PostgreSQL | **17.12** (`postgres:17-alpine`, two-role init script, runtime-role tests required) and 16 locally; 17 in CI |
 | Static analysis | ruff (lint and format), strict mypy: clean; bandit: no issues |

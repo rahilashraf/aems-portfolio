@@ -71,23 +71,26 @@ def record_rate_limited(
     client_ip: str | None,
     subject_digest: str | None = None,
     actor: User | None = None,
+    action: str = "auth.rate_limited",
 ) -> None:
-    """Durable ``auth.rate_limited`` for the first refusal of a window, a log line afterwards.
+    """Durable ``action`` event for the first refusal of a window, a log line afterwards.
 
     Every refused request used to write an audit row, so an unauthenticated flood could grow the
     append-only table without bound (AEMS-025). The first refusal per scope, key and window is
-    still recorded durably; later ones are visible in the structured log.
+    still recorded durably; later ones are visible in the structured log under the same name.
+    Used by the API limiter (``auth.rate_limited``) and the admin sign-in
+    (``auth.admin_login.rate_limited``).
     """
     if result.first_denial:
         audit.record_security_event(
-            "auth.rate_limited",
+            action,
             actor=actor,
             client_ip=client_ip,
             metadata={"scope": scope, "subject_digest": subject_digest},
         )
         return
     log_security_event(
-        "auth.rate_limited",
+        action,
         outcome="failure",
         user_id=actor.pk if actor is not None else None,
         client_ip=client_ip,

@@ -38,7 +38,7 @@ from apps.rbac.services import deactivation_blockers
 from . import ratelimit
 from .models import AuthSession, RevokeReason, User
 from .normalization import normalize_email
-from .services import deactivate_user
+from .services import deactivate_user, record_rate_limited
 from .sessions import revoke_session, revoke_user_sessions
 
 PRIVILEGED_FIELDS = ("is_staff", "is_superuser", "groups", "user_permissions")
@@ -61,7 +61,20 @@ class RateLimitedAdminAuthenticationForm(AdminAuthenticationForm):
                 ("login_ip_account", ratelimit.digest("ip_email", f"{ip}|{email}")),
             ]
         )
-        if limited is not None or ratelimit.backoff_remaining(account):
+        if limited is not None:
+            # Refusals by the limiter are bounded like the API's (AEMS-025): the first refusal of
+            # a window is durable, later ones are logged only. The response is the same.
+            record_rate_limited(
+                limited,
+                scope="admin_login",
+                client_ip=ip,
+                subject_digest=account,
+                action="auth.admin_login.rate_limited",
+            )
+            raise ValidationError(self.error_messages["rate_limited"], code="rate_limited")
+        if ratelimit.backoff_remaining(account):
+            # Within the limits: this attempt was just counted by the limiter above, so durable
+            # backoff refusals are bounded by the window's limits.
             audit.record_security_event(
                 "auth.admin_login.rate_limited", client_ip=ip, metadata={"subject_digest": account}
             )

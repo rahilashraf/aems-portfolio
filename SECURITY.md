@@ -103,7 +103,7 @@ enforced in the backend and, where possible, again in the database.
 - Metadata keys are allowlisted and typed; passwords, hashes, tokens (raw or hashed), cookies and
   request bodies never reach the table.
 - Repeated refusals are recorded durably once per rate-limit window and logged thereafter
-  (AEMS-025).
+  (AEMS-025). This applies to the API and to the Django admin sign-in.
 
 ### Database-role separation
 
@@ -240,7 +240,7 @@ Operational guidance:
   |---|---|
   | `auth.refresh.reuse_detected` | Investigate as possible token theft |
   | `auth.session.owner_mismatch` | Investigate as a possible signing-key compromise or defect |
-  | `auth.rate_limited`, `auth.login.locked` | Watch for spikes |
+  | `auth.rate_limited`, `auth.login.locked`, `auth.admin_login.rate_limited`, `auth.admin_login.failed` | Watch for spikes (repeated refusals appear in the log stream with `repeated: true`) |
   | `auth.csrf.failed` | Watch for spikes |
   | `tenant.access_denied` | Watch for enumeration attempts by an account |
   | `invitation.accept_rejected` | Watch for spikes |

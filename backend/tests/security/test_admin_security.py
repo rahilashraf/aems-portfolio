@@ -161,3 +161,67 @@ def test_view_only_staff_cannot_change_any_account() -> None:
     assert response.status_code == 403
     assert _change(client, target, full_name="Changed").status_code == 403
     assert User.objects.get(pk=target.pk).full_name == "Plain"
+
+
+# ------------------------------------------------------------------------------- AEMS-025 (admin)
+ADMIN_LOGIN = "/admin/login/"
+LIMITS = {"login_ip": (2, 300), "login_account": (100, 900), "login_ip_account": (100, 900)}
+
+
+@pytest.mark.parametrize("attempts", [3, 25])
+def test_rate_limited_admin_logins_write_one_durable_event_per_window(
+    attempts: int, events: Any
+) -> None:
+    """Denied admin sign-ins follow the bounded pattern of the API limiter: the first refusal of a
+    window is a durable audit record, later ones are structured log events only. The response
+    and the enforcement are unchanged."""
+    staff = _staff("limited@example.org", "view_user")
+    from django.test import override_settings  # noqa: PLC0415
+
+    responses = []
+    with override_settings(AUTH_RATE_LIMITS=LIMITS):
+        for _ in range(attempts):
+            client = Client()
+            responses.append(
+                client.post(ADMIN_LOGIN, {"username": staff.email, "password": "Wrong-Password-1"})
+            )
+        # Enforcement is unchanged: even the correct password is refused in the window.
+        refused = Client().post(ADMIN_LOGIN, {"username": staff.email, "password": PASSWORD})
+
+    denied = [*responses[2:], refused]
+    for response in denied:
+        assert response.status_code == 200  # the login form is re-rendered
+        assert b"Too many sign-in attempts" in response.content
+        assert "_auth_user_id" not in response.wsgi_request.session
+    assert AuditLog.objects.filter(action="auth.admin_login.rate_limited").count() == 1
+    assert AuditLog.objects.filter(action="auth.admin_login.failed").count() == 2
+    first = AuditLog.objects.get(action="auth.admin_login.rate_limited")
+    assert first.metadata["subject_digest"]
+    assert first.ip_address == "127.0.0.1"
+    # Every refusal remains visible in the security-event log stream.
+    logged = [e for e in events if e.name == "auth.admin_login.rate_limited"]
+    assert len(logged) == len(denied)
+    assert all(e.subject_digest == first.metadata["subject_digest"] for e in logged)
+
+
+def test_backed_off_admin_logins_stay_bounded_by_the_limiter(events: Any) -> None:
+    """Locked-out (backoff) attempts are counted by the limiter before they are recorded, so their
+    durable records are bounded by the window's limit as well."""
+    staff = _staff("backoff@example.org", "view_user")
+    from django.test import override_settings  # noqa: PLC0415
+
+    with override_settings(
+        AUTH_RATE_LIMITS={
+            "login_ip": (6, 300),
+            "login_account": (100, 900),
+            "login_ip_account": (100, 900),
+        },
+        AUTH_LOGIN_BACKOFF={"threshold": 2, "base_seconds": 60, "cap_seconds": 60},
+    ):
+        for _ in range(40):
+            Client().post(ADMIN_LOGIN, {"username": staff.email, "password": "Wrong-Password-1"})
+    durable = AuditLog.objects.filter(action__startswith="auth.admin_login.")
+    # 2 failures, 4 locked (backoff) refusals within the limit of 6, then 1 first rate-limit denial.
+    assert durable.filter(action="auth.admin_login.failed").count() == 2
+    assert durable.filter(action="auth.admin_login.rate_limited").count() == 5
+    assert durable.count() == 7
