@@ -17,6 +17,7 @@ from rest_framework import exceptions
 
 from apps.audit import services as audit
 from apps.core.api.exceptions import DomainError
+from apps.core.security_events import log_security_event
 from apps.rbac import services as rbac
 
 from . import ratelimit
@@ -53,13 +54,50 @@ def _raise_if_limited(
     actor: User | None = None,
 ) -> None:
     if result is not None:
+        record_rate_limited(
+            result,
+            scope=scope,
+            client_ip=client_ip,
+            subject_digest=subject_digest,
+            actor=actor,
+        )
+        raise RateLimitedError(wait=result.retry_after)
+
+
+def record_rate_limited(
+    result: ratelimit.RateLimitResult,
+    *,
+    scope: str,
+    client_ip: str | None,
+    subject_digest: str | None = None,
+    actor: User | None = None,
+    action: str = "auth.rate_limited",
+) -> None:
+    """Durable ``action`` event for the first refusal of a window, a log line afterwards.
+
+    Every refused request used to write an audit row, so an unauthenticated flood could grow the
+    append-only table without bound (AEMS-025). The first refusal per scope, key and window is
+    still recorded durably; later ones are visible in the structured log under the same name.
+    Used by the API limiter (``auth.rate_limited``) and the admin sign-in
+    (``auth.admin_login.rate_limited``).
+    """
+    if result.first_denial:
         audit.record_security_event(
-            "auth.rate_limited",
+            action,
             actor=actor,
             client_ip=client_ip,
             metadata={"scope": scope, "subject_digest": subject_digest},
         )
-        raise RateLimitedError(wait=result.retry_after)
+        return
+    log_security_event(
+        action,
+        outcome="failure",
+        user_id=actor.pk if actor is not None else None,
+        client_ip=client_ip,
+        subject_digest=subject_digest,
+        scope=scope,
+        repeated=True,
+    )
 
 
 def check_refresh_rate_limit(client_ip: str | None) -> None:
@@ -161,7 +199,7 @@ def change_password(
     _validate_new_password(new_password, user)
 
     with transaction.atomic():
-        locked = User.objects.select_for_update().get(pk=user.pk)
+        locked = User.objects.select_for_update(no_key=True).get(pk=user.pk)
         locked.set_password(new_password)
         locked.password_changed_at = timezone.now()
         locked.save(update_fields=["password", "password_changed_at"])
@@ -258,7 +296,7 @@ def confirm_password_reset(
     _validate_new_password(new_password, user)
 
     with transaction.atomic():
-        locked = User.objects.select_for_update().get(pk=user.pk)
+        locked = User.objects.select_for_update(no_key=True).get(pk=user.pk)
         if not password_reset_tokens.check_token(locked, token):  # raced with another reset
             raise InvalidResetTokenError()
         locked.set_password(new_password)
@@ -301,7 +339,7 @@ def update_profile(user: User, changes: dict[str, Any], *, client_ip: str | None
         msg = f"Profile fields {sorted(unknown)} cannot be changed here."
         raise ValueError(msg)
     with transaction.atomic():
-        locked = User.objects.select_for_update().get(pk=user.pk)
+        locked = User.objects.select_for_update(no_key=True).get(pk=user.pk)
         diff = {
             name: (getattr(locked, name), value)
             for name, value in changes.items()
@@ -332,7 +370,7 @@ def deactivate_user(user: User, *, actor: User | None = None) -> int:
     blocking organization and nothing changes anywhere. Platform administrators get no bypass.
     """
     with transaction.atomic():
-        locked = User.objects.select_for_update().get(pk=user.pk)
+        locked = User.objects.select_for_update(no_key=True).get(pk=user.pk)
         was_active = locked.is_active
         if was_active:
             rbac.assert_deactivation_keeps_owners(locked)

@@ -669,8 +669,8 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 | 4 — Organizations & tenancy | Merged | rahilashraf/aems-portfolio#5 | Review findings AEMS-012…014 resolved before merge |
 | 5 — Audit logging | Merged | rahilashraf/aems-portfolio#6 | Review findings AEMS-015/016 resolved before merge |
 | 6 — RBAC | Merged | rahilashraf/aems-portfolio#7 | Review finding AEMS-017 resolved before merge |
-| 7 — Invitations | In review | (this batch) | See Batch 7 deviations below |
-| 8 | Not started | — | — |
+| 7 — Invitations | Merged | rahilashraf/aems-portfolio#8 | Review finding AEMS-018 resolved before merge |
+| 8 — Security hardening & review | In review | (this batch) | Findings AEMS-019…028 fixed; see Batch 8 notes below and the [final report](phase-1-final-report.md) |
 
 ### Batch 2 deviations from the original plan
 
@@ -834,3 +834,32 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
   forbid new activation paths). Flagged for review.
 - **Deferred:** resending an email without reissuing, retention of old invitations and outbox
   rows, reactivation.
+
+### Batch 8 security hardening and review (ADR-0019)
+
+- **Structured review** of every Phase 1 area, with adversarial tests on real PostgreSQL (HTTP,
+  raw SQL as the runtime role, synchronized threads). An independent read-only review ran in
+  parallel; every reported issue was reproduced or verified against the code before being fixed.
+- **Fixed findings** (details and regression tests in ADR-0019):
+  - AEMS-021 (high): admin privilege escalation by non-superuser staff; deletions in the admin.
+  - AEMS-027: deadlocks between ownership operations (user/organization locks are now
+    `FOR NO KEY UPDATE`).
+  - AEMS-023: unsafe production email backends.
+  - AEMS-024: unbounded outbox re-delivery after crashed runs.
+  - AEMS-025: unbounded audit growth from refused anonymous requests.
+  - AEMS-019 / AEMS-020: 500s for oversized or deeply nested bodies and tampered audit cursors.
+  - AEMS-022: unaudited admin email changes.
+  - AEMS-026: insecure production CSRF trusted origins.
+  - AEMS-028: database-deprecated codes still granted to Owners.
+- **Security suites** in `backend/tests/security/` (§10): route policy, tenant-isolation matrix,
+  authentication, password reset, invitations, RBAC/Owner concurrency, audit integrity, database
+  safeguards, rate limiting, input validation, production settings, admin, outboxes.
+- **Documentation:** [`SECURITY.md`](../SECURITY.md) (reporting, security model, production
+  requirements, email authentication, outbox operation, retention, limitations) and the
+  [Phase 1 final report](phase-1-final-report.md).
+- **No new features or dependencies.** The production configuration gained two checks (CSRF
+  trusted origins, email backend) and one opt-in (`AEMS_EMAIL_ALLOW_UNENCRYPTED_SMTP`, used by the
+  CI container's Mailpit). The deploy check now sets an `smtp+tls://` URL and an HTTPS trusted
+  origin.
+- **Deferred (unchanged):** RLS (Phase 2 prerequisite), retention and archival, reactivation,
+  platform RBAC, historical role snapshots, MFA/SSO.

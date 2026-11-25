@@ -157,7 +157,8 @@ REST_FRAMEWORK: dict[str, Any] = {
     # API_PUBLIC_ENDPOINTS; DenyAll remains available for explicit lockdown.
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
-    "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    # JSON only; deep nesting is a 400 and oversized bodies a 413 (AEMS-019).
+    "DEFAULT_PARSER_CLASSES": ["apps.core.api.parsers.BoundedJSONParser"],
     "DEFAULT_PAGINATION_CLASS": "apps.core.api.pagination.StandardPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_FILTER_BACKENDS": [
@@ -328,6 +329,9 @@ AUTH_RATE_LIMITS: dict[str, tuple[int, int]] = {
     "password_change_user": (10, 3600),
     # Public invitation preview and acceptance (token-scoped routes).
     "invitation_ip": (60, 300),
+    # Not a request limit: the number of failed CSRF checks per IP recorded durably per window
+    # (later ones are logged only, AEMS-025). The response is 403 either way.
+    "csrf_failure_ip": (20, 300),
 }
 # Temporary exponential account backoff after consecutive failures (capped).
 AUTH_LOGIN_BACKOFF: dict[str, int] = {"threshold": 5, "base_seconds": 30, "cap_seconds": 900}

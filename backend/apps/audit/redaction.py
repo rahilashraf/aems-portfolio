@@ -135,7 +135,7 @@ METADATA_FIELDS: dict[str, Validator] = {
 #: Fields whose changes may be recorded, per target type.
 CHANGE_FIELDS: dict[str, frozenset[str]] = {
     "organization": frozenset({"name", "organization_type", "timezone", "status"}),
-    "user": frozenset({"full_name", "is_active", "is_staff", "is_superuser", "password"}),
+    "user": frozenset({"email", "full_name", "is_active", "is_staff", "is_superuser", "password"}),
     "role": frozenset({"name", "description"}),
     "membership": frozenset({"status"}),
 }

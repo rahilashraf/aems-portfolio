@@ -30,7 +30,10 @@ detection, and mypy on every commit.
 - **Tests:** every change ships with tests; tests run against PostgreSQL; coverage must stay ≥ 90%.
 - **Types:** new code passes `mypy --strict`.
 - **Security:** no secrets in code, logs, or audit records; configuration via environment
-  variables; dependencies pinned in `backend/uv.lock`.
+  variables; dependencies pinned in `backend/uv.lock`. Every new route must be classified in
+  `backend/tests/security/test_route_policy.py` (CI fails otherwise), and new user or
+  organization row locks use `select_for_update(no_key=True)` (ADR-0019). Report vulnerabilities
+  privately as described in [SECURITY.md](SECURITY.md).
 - **Decisions:** significant architectural decisions get an ADR in `docs/adr/`.
 
 ## Commit messages

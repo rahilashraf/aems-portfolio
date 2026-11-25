@@ -124,10 +124,24 @@ class FailureCategory(StrEnum):
     SMTP_ERROR = "smtp_error"
     NETWORK = "network"
     UNEXPECTED = "unexpected"
+    # Claimed more than ``max_attempts`` times without an outcome being recorded: earlier runs
+    # stopped mid-delivery (crash, timeout, kill). Never retried again (AEMS-024).
+    ABANDONED = "abandoned"
 
 
-# Failures that retrying cannot fix: the server rejected the recipient.
-PERMANENT_FAILURES = frozenset({FailureCategory.RECIPIENT_REFUSED})
+# Failures that retrying cannot fix: the server rejected the recipient, or the attempt budget was
+# spent by runs that never recorded an outcome.
+PERMANENT_FAILURES = frozenset({FailureCategory.RECIPIENT_REFUSED, FailureCategory.ABANDONED})
+
+
+def attempts_exhausted(attempts: int, max_attempts: int) -> bool:
+    """A claim beyond the budget: earlier claims ended without an outcome (AEMS-024).
+
+    Every claim increments ``attempts`` before sending, and only a recorded failure enforces
+    ``max_attempts``. A worker that dies after claiming (or after sending) records nothing, so
+    without this check the row would be reclaimed after every lease, without limit.
+    """
+    return attempts > max_attempts
 
 
 # First match wins: subclasses before their bases (SMTPException and ConnectionError are OSErrors).
@@ -283,6 +297,8 @@ def _ineligibility(row: PasswordResetOutbox, user: User | None) -> str | None:
 
 
 def deliver_claimed(row: PasswordResetOutbox, *, clock: Clock, config: OutboxSettings) -> Outcome:
+    if attempts_exhausted(row.attempts, config.max_attempts):
+        return _record_failure(row, FailureCategory.ABANDONED, clock=clock, config=config)
     user = User.objects.filter(pk=row.user_id).first()
     reason = _ineligibility(row, user)
     if user is None or reason is not None:

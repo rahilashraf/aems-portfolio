@@ -26,6 +26,7 @@ from typing import Any
 
 import structlog
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+from django.core.exceptions import RequestDataTooBig, TooManyFieldsSent
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import Http404
 from rest_framework import exceptions, status
@@ -59,6 +60,14 @@ class ConflictError(DomainError):
     status_code = status.HTTP_409_CONFLICT
     default_detail = "The request conflicts with the current state of the resource."
     default_code = "conflict"
+
+
+class RequestTooLargeError(DomainError):
+    """The request body exceeds ``DATA_UPLOAD_MAX_MEMORY_SIZE`` (HTTP 413, AEMS-019)."""
+
+    status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    default_detail = "The request body is too large."
+    default_code = "request_too_large"
 
 
 class InvalidQueryParameters(exceptions.ValidationError):
@@ -160,6 +169,9 @@ def _translate_django_exception(exc: Exception) -> Exception:
         return exceptions.PermissionDenied()
     if isinstance(exc, DjangoValidationError):
         return exceptions.ValidationError(detail=as_serializer_error(exc))
+    if isinstance(exc, (RequestDataTooBig, TooManyFieldsSent)):
+        # Django's request-size limits are client errors, not server faults (AEMS-019).
+        return RequestTooLargeError()
     return exc
 
 

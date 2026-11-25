@@ -44,6 +44,7 @@ def _run(
         "DJANGO_ALLOWED_HOSTS": "api.example.org",
         "AEMS_FRONTEND_BASE_URL": "https://app.example.org",
         "DATABASE_URL": "postgres://u:p@localhost:5432/db",
+        "EMAIL_URL": "smtp+tls://mail.example.org:587",
         **(overrides or {}),
     }
     for name in unset:

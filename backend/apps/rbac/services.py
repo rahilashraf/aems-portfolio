@@ -128,7 +128,7 @@ class Actor:
 
 
 def _lock_organization(organization: Organization) -> Organization:
-    return Organization.objects.select_for_update().get(pk=organization.pk)
+    return Organization.objects.select_for_update(no_key=True).get(pk=organization.pk)
 
 
 def _lock_actor_and_targets(
@@ -638,7 +638,7 @@ def _blocking_organizations(user: User, *, lock: bool) -> list[Any]:
         set(Membership.objects.filter(user_id=user.pk).values_list("organization_id", flat=True))
     )
     queryset = Organization.objects.filter(pk__in=organization_ids).order_by("pk")
-    organizations = list(queryset.select_for_update() if lock else queryset)
+    organizations = list(queryset.select_for_update(no_key=True) if lock else queryset)
     blocking = []
     for organization in organizations:
         if organization.status != OrganizationStatus.ACTIVE:

@@ -20,8 +20,9 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0011](0011-continuous-integration.md) | Continuous integration and required checks | Accepted |
 | [0012](0012-api-access-control-enforcement.md) | API access-control enforcement and the public-endpoint allowlist | Accepted |
 | [0013](0013-authentication-implementation-and-security-events.md) | Authentication implementation and the security-event boundary | Accepted |
-| [0014](0014-password-reset-email-outbox.md) | Password-reset email outbox | Accepted |
+| [0014](0014-password-reset-email-outbox.md) | Password-reset email outbox | Accepted; refined by 0019 |
 | [0015](0015-organizations-and-tenancy-implementation.md) | Organizations and tenancy implementation | Accepted |
-| [0016](0016-durable-audit-logging.md) | Durable audit logging, database roles and audit APIs | Accepted |
-| [0017](0017-organization-rbac-implementation.md) | Organization RBAC implementation | Accepted |
-| [0018](0018-invitations-and-onboarding.md) | Invitations and organization onboarding | Accepted |
+| [0016](0016-durable-audit-logging.md) | Durable audit logging, database roles and audit APIs | Accepted; refined by 0019 |
+| [0017](0017-organization-rbac-implementation.md) | Organization RBAC implementation | Accepted; refined by 0019 |
+| [0018](0018-invitations-and-onboarding.md) | Invitations and organization onboarding | Accepted; refined by 0019 |
+| [0019](0019-phase-1-security-hardening.md) | Phase 1 security hardening and review | Accepted (pending Batch 8 review) |

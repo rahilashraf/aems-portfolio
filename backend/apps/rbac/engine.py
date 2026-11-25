@@ -26,7 +26,7 @@ from typing import Any
 
 from apps.organizations.models import Membership, MembershipStatus, OrganizationStatus
 
-from .models import MembershipRole, SystemRole
+from .models import MembershipRole, Permission, SystemRole
 from .registry import registry
 
 _CACHE_ATTR = "_rbac_effective_permissions"
@@ -56,7 +56,12 @@ def fresh_permissions(membership_id: Any) -> tuple[frozenset[str], bool]:
         if code is not None and not deprecated:
             codes.add(code)
     if is_owner:
-        return registry.active_codes(), True
+        # Every active catalog code, minus any the database marks deprecated: a deprecation
+        # applies to Owners too (review finding AEMS-028).
+        deprecated = set(
+            Permission.objects.filter(is_deprecated=True).values_list("code", flat=True)
+        )
+        return frozenset(registry.active_codes() - deprecated), True
     return frozenset(c for c in codes if registry.is_active(c)), False
 
 
