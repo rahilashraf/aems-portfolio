@@ -285,5 +285,7 @@ independently reviewed and merged through PR #9. The squash-merge commit is
 `3c3e0f20716c05f462a5228bb0e924690bbe13de` (one parent; tree identical to reviewed head
 `089bec9f9ce3b990317a70d7c0a7046fbc76afbe`), and all six post-merge checks passed in
 [CI run 45698594699](https://github.com/rahilashraf/aems-portfolio/actions/runs/45698594699).
-Frontend implementation, integration, deployment, and Phase 2 have not begun; the Phase 2 RLS
-decision remains a prerequisite for storing student or assessment data.
+Frontend development is tracked separately and proceeds through independently reviewed
+implementation checkpoints. Backend deployment, frontend deployment and Phase 2 implementation are
+not included in this completion milestone. The Phase 2 RLS decision remains a prerequisite for
+storing student or assessment data.
