@@ -670,7 +670,9 @@ billing, Redis/Celery, file storage, RLS (gated for Phase 2), i18n, deployment, 
 | 5 — Audit logging | Merged | rahilashraf/aems-portfolio#6 | Review findings AEMS-015/016 resolved before merge |
 | 6 — RBAC | Merged | rahilashraf/aems-portfolio#7 | Review finding AEMS-017 resolved before merge |
 | 7 — Invitations | Merged | rahilashraf/aems-portfolio#8 | Review finding AEMS-018 resolved before merge |
-| 8 — Security hardening & review | In review | (this batch) | Findings AEMS-019…028 fixed; see Batch 8 notes below and the [final report](phase-1-final-report.md) |
+| 8 — Security hardening & review | Merged | rahilashraf/aems-portfolio#9 | Findings AEMS-019…028 and the admin sign-in audit-volume follow-up resolved; squash-merged as `3c3e0f20716c05f462a5228bb0e924690bbe13de`; six post-merge CI checks passed (run 45698594699) |
+
+**Phase 1 Backend Foundation status:** Complete. All eight backend batches were merged and all six post-merge CI checks passed on `3c3e0f20716c05f462a5228bb0e924690bbe13de`. This does not include the separately planned frontend, deployment, or Phase 2 data models.
 
 ### Batch 2 deviations from the original plan
 
