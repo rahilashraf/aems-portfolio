@@ -41,6 +41,33 @@ updates:
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
 
+  # Frontend npm dependencies (pnpm: frontend/package.json + frontend/pnpm-lock.yaml, ADR-0020).
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      frontend-dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+      frontend-runtime-minor-and-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+    ignore:
+      # typescript-eslint (via eslint-config-next) supports TypeScript < 6.1 only.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      # eslint-config-next's react, jsx-a11y and import plugins do not declare ESLint 10 support.
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+      # @types/node tracks the Node.js 24 LTS runtime.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+
   # Pinned GitHub Actions (full commit SHAs with version comments).
   - package-ecosystem: github-actions
     directory: /

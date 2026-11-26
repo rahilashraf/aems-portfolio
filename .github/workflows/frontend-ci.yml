@@ -1,0 +1,219 @@
+# Frontend CI (ADR-0020). Runs on every pull request and every push to main, without path filters
+# (ADR-0011), so its checks always report. Read-only token, SHA-pinned actions, no secrets.
+name: Frontend CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: frontend
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  CI: "true"
+
+jobs:
+  quality:
+    name: Frontend lint & type check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: frontend/.nvmrc
+          package-manager-cache: false
+      - name: Install locked dependencies (strict peer dependencies)
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Prettier format check
+        run: pnpm format:check
+      - name: ESLint (Next.js, React hooks, jsx-a11y; zero warnings)
+        run: pnpm lint
+      - name: Strict TypeScript
+        run: pnpm typecheck
+
+  unit:
+    name: Frontend unit & component tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: frontend/.nvmrc
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Vitest with coverage gates (85% overall, 90% for src/lib)
+        run: pnpm test:coverage
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frontend-coverage
+          path: frontend/coverage
+          if-no-files-found: warn
+          retention-days: 14
+
+  build:
+    name: Frontend production build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: frontend/.nvmrc
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Invalid configuration is refused at build time
+        run: |
+          if AEMS_ENABLE_DEV_ROUTES=yes pnpm build > /tmp/refused.txt 2>&1; then
+            echo "Build accepted AEMS_ENABLE_DEV_ROUTES=yes"; exit 1
+          fi
+          grep -q "Invalid AEMS frontend configuration" /tmp/refused.txt
+          if AEMS_ENABLE_DEV_ROUTES=true VERCEL_ENV=production pnpm build > /tmp/refused.txt 2>&1; then
+            echo "Build accepted review routes in a production deployment"; exit 1
+          fi
+          grep -q "must not be enabled in a production deployment" /tmp/refused.txt
+          echo "Invalid configuration correctly refused"
+      - name: Production build (review routes disabled)
+        run: pnpm build
+      - name: Production surface, headers and absent review routes
+        run: |
+          pnpm start -p 3100 > /tmp/server.log 2>&1 &
+          for _ in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:3100/ && break; sleep 1; done
+          expect_status() {
+            got="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:3100$1")"
+            [ "$got" = "$2" ] || { echo "$1: expected $2, got $got"; exit 1; }
+            echo "$1 -> $got"
+          }
+          expect_status / 200
+          expect_status /dev/ui 404
+          expect_status /dev/shell 404
+          expect_status /no-such-page 404
+          headers="$(curl -sI http://127.0.0.1:3100/)"
+          for header in "x-content-type-options: nosniff" "x-frame-options: DENY" \
+                        "referrer-policy: strict-origin-when-cross-origin" \
+                        "cross-origin-opener-policy: same-origin" "strict-transport-security: max-age="; do
+            echo "$headers" | grep -qi "^$header" || { echo "missing header: $header"; exit 1; }
+          done
+          if echo "$headers" | grep -qi "^x-powered-by"; then echo "X-Powered-By present"; exit 1; fi
+          echo "Production surface verified"
+
+  browser:
+    name: Frontend browser & accessibility tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: frontend/.nvmrc
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Install Playwright browsers (Chromium, WebKit)
+        run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Production build with development review routes
+        env:
+          AEMS_ENABLE_DEV_ROUTES: "true"
+        run: pnpm build
+      - name: Playwright (desktop Chromium, mobile Chromium, desktop WebKit) with axe
+        env:
+          E2E_DEV_ROUTES: "true"
+          SCREENSHOTS: "1"
+        run: pnpm test:browser
+      - name: Upload review screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frontend-screenshots
+          path: frontend/screenshots
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frontend-playwright-report
+          path: frontend/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+  audit:
+    name: Frontend dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: frontend/.nvmrc
+          package-manager-cache: false
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Runtime dependencies (moderate and above)
+        run: pnpm audit --prod --audit-level=moderate
+      - name: All dependencies (high and above)
+        run: pnpm audit --audit-level=high
+
+  result:
+    name: Frontend CI result
+    if: always()
+    needs: [quality, unit, build, browser, audit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Require every frontend job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          failed="$(echo "$RESULTS" | python3 -c 'import json,sys; print(" ".join(k for k,v in json.load(sys.stdin).items() if v["result"] != "success"))')"
+          if [ -n "$failed" ]; then echo "Failed or skipped: $failed"; exit 1; fi
+          echo "All frontend jobs succeeded"
