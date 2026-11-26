@@ -484,6 +484,19 @@ push to `main`, with no path filters ([ADR-0011](docs/adr/0011-continuous-integr
 | Docker image | clean build of the committed Dockerfile, non-root, container becomes `healthy`, endpoint behaviour, password reset and initial Owner onboarding through Mailpit, audit and RBAC database safeguards |
 | Backend CI result | passes only if every job above passed (recommended required check) |
 
+## Frontend
+
+The web application lives in [`frontend/`](frontend/README.md) (Next.js, React, strict TypeScript,
+Tailwind CSS, shadcn/ui on Radix). **FE-1A** provides the foundation, design system and responsive
+application shell; it is not yet connected to the API (FE-1B) and has no sign-in UI (FE-2).
+Architecture: [ADR-0020](docs/adr/0020-frontend-architecture.md). Commands: `make fe-install`,
+`make fe-dev`, `make fe-qa`, `make fe-browser`.
+
+[Frontend CI](.github/workflows/frontend-ci.yml) runs on every pull request and push to `main`:
+lint and type check, unit and component tests with coverage gates, production build checks,
+Playwright browser and accessibility tests (Chromium, mobile Chromium, WebKit), dependency audit,
+and a `Frontend CI result` aggregator.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting, the security model, production
