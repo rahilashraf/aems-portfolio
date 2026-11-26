@@ -12,8 +12,10 @@ export function requireDevRoutes() {
 export async function expectAccessible(page: Page, context = "") {
   // Audit the settled UI, not an element half-way through an enter animation.
   // Infinite animations (skeleton pulse, spinners) are excluded: they never finish.
+  // allSettled: an animation cancelled mid-wait (e.g. an element unmounted by React) rejects
+  // `finished` with AbortError in WebKit; a cancelled animation is settled for our purposes.
   await page.evaluate(() =>
-    Promise.all(
+    Promise.allSettled(
       document
         .getAnimations()
         .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
