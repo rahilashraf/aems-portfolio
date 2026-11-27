@@ -26,3 +26,4 @@ rewritten; a change of direction is recorded in a new ADR that supersedes the ol
 | [0017](0017-organization-rbac-implementation.md) | Organization RBAC implementation | Accepted; refined by 0019 |
 | [0018](0018-invitations-and-onboarding.md) | Invitations and organization onboarding | Accepted; refined by 0019 |
 | [0019](0019-phase-1-security-hardening.md) | Phase 1 security hardening and review | Accepted (pending Batch 8 review) |
+| [0020](0020-frontend-architecture.md) | Frontend architecture (Phase 1 Frontend) | Part 1 (FE-1A) accepted pending review |

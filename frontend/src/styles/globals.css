@@ -1,0 +1,188 @@
+/*
+ * AEMS design tokens (ADR-0020). Single source of truth for colour, radius, typography and motion.
+ *
+ * - Semantic CSS variables are defined for light (:root) and dark (.dark) themes and exposed to
+ *   Tailwind through `@theme inline`, so components use `bg-background`, `text-muted-foreground`...
+ * - Every foreground/background pair is checked for WCAG AA contrast by
+ *   `src/styles/tokens.test.ts`, which parses this file.
+ * - Organization branding (later batches) may override only --primary, --primary-foreground,
+ *   --ring and --sidebar-primary* under a scoped `[data-org-theme]` attribute.
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-fade-in: fade-in var(--duration-base) var(--ease-out-soft);
+}
+
+:root {
+  --radius: 0.5rem;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.21 0.012 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.012 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.012 265);
+  --primary: oklch(0.46 0.13 268);
+  --primary-foreground: oklch(0.985 0.003 265);
+  --secondary: oklch(0.965 0.005 265);
+  --secondary-foreground: oklch(0.25 0.015 265);
+  --muted: oklch(0.967 0.004 265);
+  --muted-foreground: oklch(0.5 0.016 265);
+  --accent: oklch(0.955 0.008 268);
+  --accent-foreground: oklch(0.25 0.02 265);
+  --destructive: oklch(0.53 0.2 27);
+  --destructive-foreground: oklch(0.985 0.003 265);
+  --success: oklch(0.5 0.12 155);
+  --success-foreground: oklch(0.985 0.003 265);
+  --warning: oklch(0.79 0.15 80);
+  --warning-foreground: oklch(0.27 0.05 70);
+  --info: oklch(0.51 0.12 240);
+  --info-foreground: oklch(0.985 0.003 265);
+  --border: oklch(0.915 0.006 265);
+  --input: oklch(0.87 0.008 265);
+  --ring: oklch(0.55 0.13 268);
+  --sidebar: oklch(0.982 0.003 265);
+  --sidebar-foreground: oklch(0.25 0.015 265);
+  --sidebar-primary: oklch(0.46 0.13 268);
+  --sidebar-primary-foreground: oklch(0.985 0.003 265);
+  --sidebar-accent: oklch(0.945 0.009 268);
+  --sidebar-accent-foreground: oklch(0.21 0.012 265);
+  --sidebar-border: oklch(0.915 0.006 265);
+  --sidebar-ring: oklch(0.55 0.13 268);
+}
+
+.dark {
+  --background: oklch(0.17 0.01 265);
+  --foreground: oklch(0.96 0.004 265);
+  --card: oklch(0.205 0.012 265);
+  --card-foreground: oklch(0.96 0.004 265);
+  --popover: oklch(0.215 0.012 265);
+  --popover-foreground: oklch(0.96 0.004 265);
+  --primary: oklch(0.74 0.11 270);
+  --primary-foreground: oklch(0.18 0.02 268);
+  --secondary: oklch(0.26 0.012 265);
+  --secondary-foreground: oklch(0.96 0.004 265);
+  --muted: oklch(0.25 0.01 265);
+  --muted-foreground: oklch(0.72 0.015 265);
+  --accent: oklch(0.28 0.015 268);
+  --accent-foreground: oklch(0.96 0.004 265);
+  --destructive: oklch(0.68 0.18 25);
+  --destructive-foreground: oklch(0.17 0.02 25);
+  --success: oklch(0.72 0.13 155);
+  --success-foreground: oklch(0.17 0.03 155);
+  --warning: oklch(0.8 0.14 80);
+  --warning-foreground: oklch(0.2 0.04 70);
+  --info: oklch(0.72 0.11 240);
+  --info-foreground: oklch(0.17 0.03 240);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.68 0.11 270);
+  --sidebar: oklch(0.19 0.011 265);
+  --sidebar-foreground: oklch(0.93 0.005 265);
+  --sidebar-primary: oklch(0.74 0.11 270);
+  --sidebar-primary-foreground: oklch(0.18 0.02 268);
+  --sidebar-accent: oklch(0.26 0.013 268);
+  --sidebar-accent-foreground: oklch(0.96 0.004 265);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.68 0.11 270);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background font-sans text-sm text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply tracking-tight text-foreground;
+  }
+
+  /* Keyboard focus is always visible; pointer focus stays quiet. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+}
+
+/* Users who prefer reduced motion get no transitions or animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

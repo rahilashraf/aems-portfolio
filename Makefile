@@ -169,3 +169,37 @@ deploy-check: ## Django deployment checklist against production settings
 	$(UV) run python manage.py check --deploy --fail-level WARNING
 
 qa: lint typecheck test security audit secrets check-migrations schema-check deploy-check ## Run every quality gate
+
+# ------------------------------------------------------------------ frontend (FE-1A, ADR-0020)
+.PHONY: fe-install fe-dev fe-lint fe-typecheck fe-test fe-build fe-browser fe-audit fe-qa
+FRONTEND := frontend
+PNPM := cd $(FRONTEND) && pnpm
+
+fe-install: ## Install frontend dependencies from the lockfile (strict peer dependencies)
+	$(PNPM) install --frozen-lockfile
+
+fe-dev: ## Run the Next.js dev server with the review routes (/dev/ui, /dev/shell)
+	cd $(FRONTEND) && AEMS_ENABLE_DEV_ROUTES=true pnpm dev
+
+fe-lint: ## Prettier check and ESLint (zero warnings)
+	$(PNPM) format:check
+	$(PNPM) lint
+
+fe-typecheck: ## Strict TypeScript
+	$(PNPM) typecheck
+
+fe-test: ## Unit and component tests with coverage gates
+	$(PNPM) test:coverage
+
+fe-build: ## Production build (review routes disabled)
+	$(PNPM) build
+
+fe-browser: ## Build with review routes and run the Playwright suite (set SCREENSHOTS=1 to capture)
+	cd $(FRONTEND) && AEMS_ENABLE_DEV_ROUTES=true pnpm build
+	cd $(FRONTEND) && E2E_DEV_ROUTES=true pnpm test:browser
+
+fe-audit: ## Dependency vulnerability audit
+	$(PNPM) audit --prod --audit-level=moderate
+	$(PNPM) audit --audit-level=high
+
+fe-qa: fe-lint fe-typecheck fe-test fe-build fe-audit ## Every frontend gate except browser tests

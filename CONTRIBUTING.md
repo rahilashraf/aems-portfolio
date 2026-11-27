@@ -34,6 +34,9 @@ detection, and mypy on every commit.
   `backend/tests/security/test_route_policy.py` (CI fails otherwise), and new user or
   organization row locks use `select_for_update(no_key=True)` (ADR-0019). Report vulnerabilities
   privately as described in [SECURITY.md](SECURITY.md).
+- **Frontend:** strict TypeScript, accessible components (keyboard, labels, axe-clean), design
+  tokens from `frontend/src/styles/globals.css` only, and no placeholder or non-functional
+  controls. Run `make fe-qa` (and `make fe-browser` for UI changes) before pushing.
 - **Decisions:** significant architectural decisions get an ADR in `docs/adr/`.
 
 ## Commit messages

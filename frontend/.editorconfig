@@ -1,0 +1,3 @@
+# Frontend overrides of the repository .editorconfig: TypeScript/CSS use 2-space indentation.
+[*.{ts,tsx,js,mjs,mts,cjs,css,json}]
+indent_size = 2

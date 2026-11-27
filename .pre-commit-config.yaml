@@ -28,7 +28,7 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline", "--no-verify"]
-        exclude: (uv\.lock|\.secrets\.baseline)$
+        exclude: (uv\.lock|pnpm-lock\.yaml|\.secrets\.baseline)$
 
   - repo: local
     hooks:
