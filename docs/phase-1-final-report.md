@@ -4,7 +4,7 @@
 |---|---|
 | **Phase** | 1 — Backend Foundation |
 | **Batches** | 1–8 (Batch 8: security hardening and review) |
-| **Status** | Implementation complete; **Batch 8 awaiting independent review and merge**. Phase 1 is not formally complete until Batch 8 has been reviewed and merged. |
+| **Status** | **Phase 1 Backend Foundation complete.** Batch 8 was independently reviewed and squash-merged via PR #9 as `3c3e0f20716c05f462a5228bb0e924690bbe13de`; all six post-merge CI checks passed (run 45698594699). Frontend, deployment and Phase 2 remain separate and are not part of this completion. |
 | **Plan** | [`docs/phase-1-plan.md`](phase-1-plan.md) |
 | **Security model** | [`SECURITY.md`](../SECURITY.md) |
 | **Architecture decisions** | [ADR-0001 … ADR-0019](adr/README.md) |
@@ -280,5 +280,12 @@ documented design limits, chiefly the absence of RLS, which must be decided befo
 is stored.
 
 This assessment covers code and configuration only. AEMS has not been deployed, penetration-tested
-by an independent party, or certified. **Phase 1 is complete only once Batch 8 has been
-independently reviewed and merged.**
+by an independent party, or certified. **Phase 1 Backend Foundation is complete:** Batch 8 was
+independently reviewed and merged through PR #9. The squash-merge commit is
+`3c3e0f20716c05f462a5228bb0e924690bbe13de` (one parent; tree identical to reviewed head
+`089bec9f9ce3b990317a70d7c0a7046fbc76afbe`), and all six post-merge checks passed in
+[CI run 45698594699](https://github.com/rahilashraf/aems-portfolio/actions/runs/45698594699).
+Frontend development is tracked separately and proceeds through independently reviewed
+implementation checkpoints. Backend deployment, frontend deployment and Phase 2 implementation are
+not included in this completion milestone. The Phase 2 RLS decision remains a prerequisite for
+storing student or assessment data.
